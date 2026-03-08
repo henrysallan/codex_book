@@ -258,6 +258,14 @@ export async function deleteDocument(id: string): Promise<void> {
   if (error) throw error;
 }
 
+/** Move a document into a folder (or to root if folderId is null) */
+export async function moveDocument(
+  docId: string,
+  folderId: string | null
+): Promise<void> {
+  await updateDocument(docId, { folder_id: folderId });
+}
+
 // ---------- Tree Building ----------
 
 export function buildFolderTree(

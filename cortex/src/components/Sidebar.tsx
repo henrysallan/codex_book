@@ -5,6 +5,17 @@ import { useAppStore } from "@/lib/store";
 import { useAuth } from "@/lib/auth";
 import { Folder, DocumentMeta } from "@/lib/types";
 import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  useDraggable,
+} from "@dnd-kit/core";
+import {
   ChevronRight,
   ChevronDown,
   FileText,
@@ -27,12 +38,19 @@ export function Sidebar() {
   const createDocument = useAppStore((s) => s.createDocument);
   const deleteDocument = useAppStore((s) => s.deleteDocument);
   const deleteFolder = useAppStore((s) => s.deleteFolder);
+  const moveDocument = useAppStore((s) => s.moveDocument);
   const toggleChat = useAppStore((s) => s.toggleChat);
   const isChatOpen = useAppStore((s) => s.isChatOpen);
   const { user, signOut } = useAuth();
 
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  const [draggingDoc, setDraggingDoc] = useState<DocumentMeta | null>(null);
+
+  // Require 5px movement before starting a drag — so clicks still work
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
 
   const handleCreateFolder = async () => {
     if (newFolderName.trim()) {
@@ -42,115 +60,173 @@ export function Sidebar() {
     }
   };
 
+  const handleDragStart = (event: DragStartEvent) => {
+    const doc = event.active.data.current?.doc as DocumentMeta | undefined;
+    setDraggingDoc(doc ?? null);
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    setDraggingDoc(null);
+    const { active, over } = event;
+    if (!over) return;
+
+    const docId = active.id as string;
+    const targetFolderId = over.id as string;
+
+    // "root" is a special droppable — means move out of any folder
+    const newFolderId = targetFolderId === "root" ? null : targetFolderId;
+
+    // Don't move if already in that folder
+    const currentFolderId = (active.data.current?.doc as DocumentMeta)?.folderId ?? null;
+    if (currentFolderId === newFolderId) return;
+
+    await moveDocument(docId, newFolderId);
+  };
+
   return (
-    <div className="w-[260px] shrink-0 h-full flex flex-col bg-sidebar-bg">
-      {/* Logo */}
-      <div className="px-4 py-3 flex items-center justify-between">
-        <span className="text-xs font-medium tracking-wide text-foreground">
-          Cortex
-        </span>
-        <div className="flex items-center gap-1">
+    <DndContext
+      sensors={sensors}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+    >
+      <div className="w-[260px] shrink-0 h-full flex flex-col bg-sidebar-bg">
+        {/* Logo */}
+        <div className="px-4 py-3 flex items-center justify-between">
+          <span className="text-xs font-medium tracking-wide text-foreground">
+            Cortex
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => createDocument(null)}
+              className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+              title="New document"
+            >
+              <Plus size={14} />
+            </button>
+            <button
+              onClick={() => setIsCreatingFolder(true)}
+              className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+              title="New folder"
+            >
+              <FolderIcon size={14} />
+            </button>
+          </div>
+        </div>
+
+        {/* File Tree */}
+        <RootDropZone>
+          <div className="flex-1 overflow-y-auto px-1 py-1">
+            {/* New folder input */}
+            {isCreatingFolder && (
+              <div className="px-3 py-1">
+                <input
+                  type="text"
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleCreateFolder();
+                    if (e.key === "Escape") setIsCreatingFolder(false);
+                  }}
+                  onBlur={() => {
+                    if (newFolderName.trim()) handleCreateFolder();
+                    else setIsCreatingFolder(false);
+                  }}
+                  autoFocus
+                  placeholder="Folder name"
+                  className="w-full text-xs bg-white border border-border rounded px-2 py-1 outline-none focus:border-black/30"
+                />
+              </div>
+            )}
+
+            {/* Folders */}
+            {folders.map((folder) => (
+              <FolderItem
+                key={folder.id}
+                folder={folder}
+                depth={0}
+                activeDocumentId={activeDocumentId}
+                onToggle={toggleFolder}
+                onOpenDoc={openDocument}
+                onCreateDoc={createDocument}
+                onDeleteDoc={deleteDocument}
+                onDeleteFolder={deleteFolder}
+              />
+            ))}
+
+            {/* Root-level documents */}
+            {rootDocuments.map((doc) => (
+              <DraggableDocItem
+                key={doc.id}
+                doc={doc}
+                depth={0}
+                isActive={activeDocumentId === doc.id}
+                onOpen={openDocument}
+                onDelete={deleteDocument}
+              />
+            ))}
+          </div>
+        </RootDropZone>
+
+        {/* Bottom actions */}
+        <div className="border-t border-border px-3 py-2 flex flex-col gap-1">
           <button
-            onClick={() => createDocument(null)}
-            className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
-            title="New document"
+            onClick={toggleChat}
+            className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
+              isChatOpen
+                ? "bg-black/5 text-foreground"
+                : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+            }`}
           >
-            <Plus size={14} />
+            <MessageSquare size={14} />
+            AI Chat
           </button>
-          <button
-            onClick={() => setIsCreatingFolder(true)}
-            className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
-            title="New folder"
-          >
-            <FolderIcon size={14} />
+          <button className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors">
+            <Settings size={14} />
+            Settings
           </button>
+          {user && (
+            <button
+              onClick={signOut}
+              className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
+            >
+              <LogOut size={14} />
+              {user.user_metadata?.full_name || user.email || "Sign out"}
+            </button>
+          )}
         </div>
       </div>
 
-      {/* File Tree */}
-      <div className="flex-1 overflow-y-auto px-1 py-1">
-        {/* New folder input */}
-        {isCreatingFolder && (
-          <div className="px-3 py-1">
-            <input
-              type="text"
-              value={newFolderName}
-              onChange={(e) => setNewFolderName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleCreateFolder();
-                if (e.key === "Escape") setIsCreatingFolder(false);
-              }}
-              onBlur={() => {
-                if (newFolderName.trim()) handleCreateFolder();
-                else setIsCreatingFolder(false);
-              }}
-              autoFocus
-              placeholder="Folder name"
-              className="w-full text-xs bg-white border border-border rounded px-2 py-1 outline-none focus:border-black/30"
-            />
+      {/* Drag overlay — floating ghost while dragging */}
+      <DragOverlay>
+        {draggingDoc ? (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-white shadow-md border border-border text-xs text-foreground opacity-90">
+            <FileText size={13} className="text-muted-foreground shrink-0" />
+            <span className="truncate">{draggingDoc.title}</span>
           </div>
-        )}
+        ) : null}
+      </DragOverlay>
+    </DndContext>
+  );
+}
 
-        {/* Folders */}
-        {folders.map((folder) => (
-          <FolderItem
-            key={folder.id}
-            folder={folder}
-            depth={0}
-            activeDocumentId={activeDocumentId}
-            onToggle={toggleFolder}
-            onOpenDoc={openDocument}
-            onCreateDoc={createDocument}
-            onDeleteDoc={deleteDocument}
-            onDeleteFolder={deleteFolder}
-          />
-        ))}
+/* ---------- Root Drop Zone (moving docs out of folders) ---------- */
 
-        {/* Root-level documents */}
-        {rootDocuments.map((doc) => (
-          <DocItem
-            key={doc.id}
-            doc={doc}
-            depth={0}
-            isActive={activeDocumentId === doc.id}
-            onOpen={openDocument}
-            onDelete={deleteDocument}
-          />
-        ))}
-      </div>
+function RootDropZone({ children }: { children: React.ReactNode }) {
+  const { isOver, setNodeRef } = useDroppable({ id: "root" });
 
-      {/* Bottom actions */}
-      <div className="border-t border-border px-3 py-2 flex flex-col gap-1">
-        <button
-          onClick={toggleChat}
-          className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
-            isChatOpen
-              ? "bg-black/5 text-foreground"
-              : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
-          }`}
-        >
-          <MessageSquare size={14} />
-          AI Chat
-        </button>
-        <button className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors">
-          <Settings size={14} />
-          Settings
-        </button>
-        {user && (
-          <button
-            onClick={signOut}
-            className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
-          >
-            <LogOut size={14} />
-            {user.user_metadata?.full_name || user.email || "Sign out"}
-          </button>
-        )}
-      </div>
+  return (
+    <div
+      ref={setNodeRef}
+      className={`flex-1 min-h-0 flex flex-col transition-colors ${
+        isOver ? "bg-accent/30" : ""
+      }`}
+    >
+      {children}
     </div>
   );
 }
 
-/* ---------- Folder Tree Item ---------- */
+/* ---------- Folder Tree Item (Droppable) ---------- */
 
 function FolderItem({
   folder,
@@ -172,11 +248,16 @@ function FolderItem({
   onDeleteFolder: (id: string) => void;
 }) {
   const [hovering, setHovering] = useState(false);
+  const { isOver, setNodeRef } = useDroppable({ id: folder.id });
 
   return (
-    <div>
+    <div ref={setNodeRef}>
       <div
-        className="group flex items-center gap-1 px-2 py-1 rounded cursor-pointer hover:bg-black/5 transition-colors"
+        className={`group flex items-center gap-1 px-2 py-1 rounded cursor-pointer transition-colors ${
+          isOver
+            ? "bg-accent/40 ring-1 ring-accent"
+            : "hover:bg-black/5"
+        }`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={() => onToggle(folder.id)}
         onMouseEnter={() => setHovering(true)}
@@ -241,7 +322,7 @@ function FolderItem({
             />
           ))}
           {folder.documents.map((doc) => (
-            <DocItem
+            <DraggableDocItem
               key={doc.id}
               doc={doc}
               depth={depth + 1}
@@ -256,9 +337,9 @@ function FolderItem({
   );
 }
 
-/* ---------- Document Tree Item ---------- */
+/* ---------- Draggable Document Tree Item ---------- */
 
-function DocItem({
+function DraggableDocItem({
   doc,
   depth,
   isActive,
@@ -272,11 +353,22 @@ function DocItem({
   onDelete: (id: string) => void;
 }) {
   const [hovering, setHovering] = useState(false);
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: doc.id,
+    data: { doc },
+  });
 
   return (
     <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
       className={`group flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition-colors ${
-        isActive ? "bg-black/5" : "hover:bg-black/[0.03]"
+        isDragging
+          ? "opacity-40"
+          : isActive
+          ? "bg-black/5"
+          : "hover:bg-black/[0.03]"
       }`}
       style={{ paddingLeft: `${depth * 16 + 24}px` }}
       onClick={() => onOpen(doc.id)}
@@ -287,7 +379,7 @@ function DocItem({
       <span className="text-xs text-foreground truncate flex-1">
         {doc.title}
       </span>
-      {hovering && (
+      {hovering && !isDragging && (
         <button
           onClick={(e) => {
             e.stopPropagation();

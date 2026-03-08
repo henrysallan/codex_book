@@ -18,6 +18,7 @@ import {
   deleteDocument as dbDeleteDocument,
   deleteFolder as dbDeleteFolder,
   renameFolder as dbRenameFolder,
+  moveDocument as dbMoveDocument,
   buildFolderTree,
   getRootDocuments,
   dbDocumentToDocument,
@@ -59,6 +60,7 @@ interface AppState {
     }>
   ) => Promise<void>;
   deleteDocument: (id: string) => Promise<void>;
+  moveDocument: (docId: string, folderId: string | null) => Promise<void>;
   toggleChat: () => void;
   addChatMessage: (message: Omit<ChatMessage, "id" | "timestamp">) => void;
 }
@@ -212,6 +214,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   deleteDocument: async (id: string) => {
     get().closeTab(id);
     await dbDeleteDocument(id);
+    await get().initialize();
+  },
+
+  moveDocument: async (docId: string, folderId: string | null) => {
+    await dbMoveDocument(docId, folderId);
     await get().initialize();
   },
 
