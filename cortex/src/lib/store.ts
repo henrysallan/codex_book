@@ -19,6 +19,7 @@ import {
   deleteFolder as dbDeleteFolder,
   renameFolder as dbRenameFolder,
   moveDocument as dbMoveDocument,
+  propagatePageLinkTitle,
   buildFolderTree,
   getRootDocuments,
   dbDocumentToDocument,
@@ -205,6 +206,13 @@ export const useAppStore = create<AppState>((set, get) => ({
           t.documentId === id ? { ...t, title: updates.title! } : t
         ),
       });
+
+      // Propagate the new title to all pageLink nodes referencing this doc
+      try {
+        await propagatePageLinkTitle(id, updates.title);
+      } catch (err) {
+        console.error("Failed to propagate page link title:", err);
+      }
     }
 
     // Refresh tree

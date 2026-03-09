@@ -443,6 +443,61 @@ export async function searchDocuments(query: string): Promise<SearchResult[]> {
 }
 
 // ============================================================
+// Page-link title propagation
+// ============================================================
+
+/** Walk BlockNote JSON and update docTitle for all pageLink nodes matching docId.
+ *  Returns updated content string, or null if nothing changed. */
+function updatePageLinkTitlesInContent(
+  content: string,
+  docId: string,
+  newTitle: string
+): string | null {
+  try {
+    const blocks = JSON.parse(content);
+    let changed = false;
+    function walk(node: unknown) {
+      if (!node || typeof node !== "object") return;
+      const obj = node as Record<string, unknown>;
+      if (
+        obj.type === "pageLink" &&
+        obj.props &&
+        (obj.props as Record<string, unknown>).docId === docId
+      ) {
+        if ((obj.props as Record<string, unknown>).docTitle !== newTitle) {
+          (obj.props as Record<string, unknown>).docTitle = newTitle;
+          changed = true;
+        }
+      }
+      if (Array.isArray(obj.content)) obj.content.forEach(walk);
+      if (Array.isArray(obj.children)) obj.children.forEach(walk);
+    }
+    if (Array.isArray(blocks)) blocks.forEach(walk);
+    return changed ? JSON.stringify(blocks) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Update the displayed title in all pageLink nodes across every document that links to docId */
+export async function propagatePageLinkTitle(
+  docId: string,
+  newTitle: string
+): Promise<void> {
+  const allDocs = isSupabaseConfigured()
+    ? (await supabase!.from("documents").select("id, content").then((r) => r.data)) ?? []
+    : getLocalDocuments();
+
+  for (const doc of allDocs) {
+    const d = doc as { id: string; content: string };
+    const updated = updatePageLinkTitlesInContent(d.content, docId, newTitle);
+    if (updated) {
+      await updateDocument(d.id, { content: updated });
+    }
+  }
+}
+
+// ============================================================
 // Backlinks
 // ============================================================
 

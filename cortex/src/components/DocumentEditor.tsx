@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useAppStore } from "@/lib/store";
 import { Document } from "@/lib/types";
-import { parseBacklinks, syncBacklinks } from "@/lib/db";
+import { parseBacklinks, syncBacklinks, createDocument as dbCreateDocument } from "@/lib/db";
 import { schema } from "@/lib/editorSchema";
 import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
@@ -23,7 +23,7 @@ interface DocumentEditorProps {
 
 export function DocumentEditor({ document }: DocumentEditorProps) {
   const saveDocument = useAppStore((s) => s.saveDocument);
-  const createDocument = useAppStore((s) => s.createDocument);
+  const initialize = useAppStore((s) => s.initialize);
   const _dbDocuments = useAppStore((s) => s._dbDocuments);
   const [title, setTitle] = useState(document.title);
   const [subtitle, setSubtitle] = useState(document.subtitle || "");
@@ -60,11 +60,14 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
       const newPageItem: DefaultReactSuggestionItem = {
         title: "New page",
         onItemClick: async () => {
-          const docId = await createDocument(null);
+          // Create silently (no navigation)
+          const dbDoc = await dbCreateDocument(null);
+          // Refresh sidebar so new doc appears
+          await initialize();
           editor.insertInlineContent([
             {
               type: "pageLink" as const,
-              props: { docId, docTitle: "Untitled" },
+              props: { docId: dbDoc.id, docTitle: "Untitled" },
             },
             " ",
           ]);
@@ -102,7 +105,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
         query
       );
     },
-    [editor, _dbDocuments, document.id, createDocument]
+    [editor, _dbDocuments, document.id, initialize]
   );
 
   // ─── @ mention menu (page links) ───
