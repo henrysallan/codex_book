@@ -4,12 +4,18 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useAppStore } from "@/lib/store";
 import { Document } from "@/lib/types";
 import { parseBacklinks, syncBacklinks } from "@/lib/db";
+import { schema } from "@/lib/editorSchema";
 import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
-import { Block } from "@blocknote/core";
+import {
+  DefaultReactSuggestionItem,
+  getDefaultReactSlashMenuItems,
+  SuggestionMenuController,
+} from "@blocknote/react";
+import { filterSuggestionItems } from "@blocknote/core/extensions";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
-import { X } from "lucide-react";
+import { X, FileText, FilePlus } from "lucide-react";
 
 interface DocumentEditorProps {
   document: Document;
@@ -17,6 +23,7 @@ interface DocumentEditorProps {
 
 export function DocumentEditor({ document }: DocumentEditorProps) {
   const saveDocument = useAppStore((s) => s.saveDocument);
+  const createDocument = useAppStore((s) => s.createDocument);
   const _dbDocuments = useAppStore((s) => s._dbDocuments);
   const [title, setTitle] = useState(document.title);
   const [subtitle, setSubtitle] = useState(document.subtitle || "");
@@ -25,7 +32,8 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Parse initial content for BlockNote
-  let initialContent: Block[] | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let initialContent: any[] | undefined;
   try {
     const parsed = JSON.parse(document.content);
     if (Array.isArray(parsed) && parsed.length > 0) {
@@ -36,10 +44,97 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
   }
 
   const editor = useCreateBlockNote({
+    schema,
     initialContent,
   });
 
-  // Auto-save on content change
+  // ─── Custom slash menu items (defaults + "New page" + document links) ───
+
+  const getSlashMenuItems = useCallback(
+    (query: string): DefaultReactSuggestionItem[] => {
+      // Default items (headings, lists, code, etc.)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const defaultItems = getDefaultReactSlashMenuItems(editor as any);
+
+      // "New page" — create a document and insert a page-link to it
+      const newPageItem: DefaultReactSuggestionItem = {
+        title: "New page",
+        onItemClick: async () => {
+          const docId = await createDocument(null);
+          editor.insertInlineContent([
+            {
+              type: "pageLink" as const,
+              props: { docId, docTitle: "Untitled" },
+            },
+            " ",
+          ]);
+        },
+        aliases: ["new", "create", "page", "subpage"],
+        group: "Pages",
+        icon: <FilePlus size={18} />,
+        subtext: "Create a new page and insert a link",
+      };
+
+      // Each existing document as a linkable slash-menu item
+      const docItems: DefaultReactSuggestionItem[] = _dbDocuments
+        .filter((d) => d.id !== document.id)
+        .map((doc) => ({
+          title: doc.title || "Untitled",
+          onItemClick: () => {
+            editor.insertInlineContent([
+              {
+                type: "pageLink" as const,
+                props: {
+                  docId: doc.id,
+                  docTitle: doc.title || "Untitled",
+                },
+              },
+              " ",
+            ]);
+          },
+          aliases: ["link", "page", "link to page"],
+          group: "Pages",
+          icon: <FileText size={18} />,
+        }));
+
+      return filterSuggestionItems(
+        [...defaultItems, newPageItem, ...docItems],
+        query
+      );
+    },
+    [editor, _dbDocuments, document.id, createDocument]
+  );
+
+  // ─── @ mention menu (page links) ───
+
+  const getPageMentionItems = useCallback(
+    (query: string): DefaultReactSuggestionItem[] => {
+      const items: DefaultReactSuggestionItem[] = _dbDocuments
+        .filter((d) => d.id !== document.id)
+        .map((doc) => ({
+          title: doc.title || "Untitled",
+          onItemClick: () => {
+            editor.insertInlineContent([
+              {
+                type: "pageLink" as const,
+                props: {
+                  docId: doc.id,
+                  docTitle: doc.title || "Untitled",
+                },
+              },
+              " ",
+            ]);
+          },
+          icon: <FileText size={14} />,
+        }));
+
+      return filterSuggestionItems(items, query);
+    },
+    [editor, _dbDocuments, document.id]
+  );
+
+  // ─── Auto-save on content change ───
+
   const handleEditorChange = useCallback(() => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
@@ -49,7 +144,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
       const content = JSON.stringify(blocks);
       saveDocument(document.id, { content });
 
-      // Parse and sync backlinks
+      // Parse and sync backlinks (supports both [[wikilinks]] and pageLink nodes)
       try {
         const targetIds = parseBacklinks(content, _dbDocuments);
         await syncBacklinks(document.id, targetIds);
@@ -59,7 +154,8 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
     }, 1000);
   }, [editor, document.id, saveDocument, _dbDocuments]);
 
-  // Auto-save title changes
+  // ─── Title / subtitle / tags handlers ───
+
   const handleTitleBlur = useCallback(() => {
     const trimmed = title.trim() || "Untitled";
     if (trimmed !== document.title) {
@@ -67,14 +163,12 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
     }
   }, [title, document.id, document.title, saveDocument]);
 
-  // Auto-save subtitle changes
   const handleSubtitleBlur = useCallback(() => {
     if (subtitle !== (document.subtitle || "")) {
       saveDocument(document.id, { subtitle: subtitle || null });
     }
   }, [subtitle, document.id, document.subtitle, saveDocument]);
 
-  // Tag management
   const addTag = useCallback(() => {
     const tag = tagInput.trim();
     if (tag && !tags.includes(tag)) {
@@ -179,7 +273,19 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
           editor={editor}
           onChange={handleEditorChange}
           theme="light"
-        />
+          slashMenu={false}
+        >
+          {/* Custom slash menu: default items + pages group */}
+          <SuggestionMenuController
+            triggerCharacter="/"
+            getItems={async (query) => getSlashMenuItems(query)}
+          />
+          {/* @ mention menu for quick page linking */}
+          <SuggestionMenuController
+            triggerCharacter="@"
+            getItems={async (query) => getPageMentionItems(query)}
+          />
+        </BlockNoteView>
       </div>
     </div>
   );

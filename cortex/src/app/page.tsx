@@ -10,6 +10,7 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { CommandPalette } from "@/components/CommandPalette";
 import { SearchDialog } from "@/components/SearchDialog";
 import { LoginScreen } from "@/components/LoginScreen";
+import { NotionImport } from "@/components/NotionImport";
 
 export default function Home() {
   const { user, isLoading: authLoading } = useAuth();
@@ -19,6 +20,7 @@ export default function Home() {
 
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
 
   // Only initialize store once auth is resolved
   useEffect(() => {
@@ -75,7 +77,7 @@ export default function Home() {
   return (
     <div className="h-screen w-screen flex overflow-hidden bg-white">
       {/* Left Panel - File Tree */}
-      <Sidebar />
+      <Sidebar onOpenImport={() => setIsImportOpen(true)} />
 
       {/* Center Panel - Editor */}
       <div className="flex-1 min-w-0 flex flex-col border-l border-border">
@@ -97,6 +99,10 @@ export default function Home() {
       <SearchDialog
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
+      />
+      <NotionImport
+        isOpen={isImportOpen}
+        onClose={() => setIsImportOpen(false)}
       />
     </div>
   );

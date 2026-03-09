@@ -173,7 +173,8 @@ export async function fetchDocument(id: string): Promise<DbDocument | null> {
 
 export async function createDocument(
   folderId: string | null = null,
-  title: string = "Untitled"
+  title: string = "Untitled",
+  content: string = "[]"
 ): Promise<DbDocument> {
   const now = new Date().toISOString();
   const userId = await getCurrentUserId();
@@ -183,7 +184,7 @@ export async function createDocument(
     subtitle: null,
     folder_id: folderId,
     user_id: userId,
-    content: "[]",
+    content,
     tags: [],
     position: 0,
     created_at: now,
@@ -460,7 +461,32 @@ function setLocalBacklinks(links: DbBacklink[]) {
   localStorage.setItem(BACKLINKS_KEY, JSON.stringify(links));
 }
 
-/** Parse [[wikilinks]] from BlockNote JSON content and return matched document IDs */
+/** Walk BlockNote JSON content and extract docId from any pageLink inline nodes */
+function extractPageLinkIds(content: string): string[] {
+  try {
+    const blocks = JSON.parse(content);
+    const ids: string[] = [];
+    function walk(node: unknown) {
+      if (!node || typeof node !== "object") return;
+      const obj = node as Record<string, unknown>;
+      if (
+        obj.type === "pageLink" &&
+        obj.props &&
+        typeof (obj.props as Record<string, unknown>).docId === "string"
+      ) {
+        ids.push((obj.props as Record<string, unknown>).docId as string);
+      }
+      if (Array.isArray(obj.content)) obj.content.forEach(walk);
+      if (Array.isArray(obj.children)) obj.children.forEach(walk);
+    }
+    if (Array.isArray(blocks)) blocks.forEach(walk);
+    return ids;
+  } catch {
+    return [];
+  }
+}
+
+/** Parse [[wikilinks]] and pageLink nodes from BlockNote JSON content and return matched document IDs */
 export function parseBacklinks(
   content: string,
   allDocuments: DbDocument[]
@@ -473,20 +499,27 @@ export function parseBacklinks(
     linkedTitles.add(match[1].toLowerCase().trim());
   }
 
-  if (linkedTitles.size === 0) return [];
+  const ids = new Set<string>();
 
-  // Resolve titles to document IDs
-  const titleToId = new Map<string, string>();
-  for (const doc of allDocuments) {
-    titleToId.set(doc.title.toLowerCase().trim(), doc.id);
+  // Resolve wikilink titles to document IDs
+  if (linkedTitles.size > 0) {
+    const titleToId = new Map<string, string>();
+    for (const doc of allDocuments) {
+      titleToId.set(doc.title.toLowerCase().trim(), doc.id);
+    }
+    for (const title of linkedTitles) {
+      const id = titleToId.get(title);
+      if (id) ids.add(id);
+    }
   }
 
-  const ids: string[] = [];
-  for (const title of linkedTitles) {
-    const id = titleToId.get(title);
-    if (id) ids.push(id);
+  // Also extract from pageLink inline content nodes
+  const pageLinkIds = extractPageLinkIds(content);
+  for (const id of pageLinkIds) {
+    ids.add(id);
   }
-  return ids;
+
+  return Array.from(ids);
 }
 
 /** Sync backlinks for a source document. Replaces all existing outgoing links. */

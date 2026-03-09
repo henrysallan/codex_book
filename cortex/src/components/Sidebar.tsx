@@ -26,9 +26,10 @@ import {
   MessageSquare,
   Trash2,
   LogOut,
+  Upload,
 } from "lucide-react";
 
-export function Sidebar() {
+export function Sidebar({ onOpenImport }: { onOpenImport?: () => void }) {
   const folders = useAppStore((s) => s.folders);
   const rootDocuments = useAppStore((s) => s.rootDocuments);
   const activeDocumentId = useAppStore((s) => s.activeDocumentId);
@@ -184,6 +185,15 @@ export function Sidebar() {
             <Settings size={14} />
             Settings
           </button>
+          {onOpenImport && (
+            <button
+              onClick={onOpenImport}
+              className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
+            >
+              <Upload size={14} />
+              Import from Notion
+            </button>
+          )}
           {user && (
             <button
               onClick={signOut}
