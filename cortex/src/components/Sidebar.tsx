@@ -27,6 +27,7 @@ import {
   Trash2,
   LogOut,
   Upload,
+  AlertTriangle,
 } from "lucide-react";
 
 export function Sidebar({ onOpenImport }: { onOpenImport?: () => void }) {
@@ -40,6 +41,7 @@ export function Sidebar({ onOpenImport }: { onOpenImport?: () => void }) {
   const deleteDocument = useAppStore((s) => s.deleteDocument);
   const deleteFolder = useAppStore((s) => s.deleteFolder);
   const moveDocument = useAppStore((s) => s.moveDocument);
+  const _dbDocuments = useAppStore((s) => s._dbDocuments);
   const toggleChat = useAppStore((s) => s.toggleChat);
   const isChatOpen = useAppStore((s) => s.isChatOpen);
   const { user, signOut } = useAuth();
@@ -47,6 +49,31 @@ export function Sidebar({ onOpenImport }: { onOpenImport?: () => void }) {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [draggingDoc, setDraggingDoc] = useState<DocumentMeta | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    type: "doc" | "folder";
+    id: string;
+    name: string;
+  } | null>(null);
+
+  const requestDeleteDoc = (id: string) => {
+    const doc = [...rootDocuments, ..._dbDocuments].find((d) => d.id === id);
+    setPendingDelete({ type: "doc", id, name: doc?.title || "Untitled" });
+  };
+
+  const requestDeleteFolder = (id: string) => {
+    const folder = folders.find((f) => f.id === id);
+    setPendingDelete({ type: "folder", id, name: folder?.name || "Untitled" });
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    if (pendingDelete.type === "doc") {
+      await deleteDocument(pendingDelete.id);
+    } else {
+      await deleteFolder(pendingDelete.id);
+    }
+    setPendingDelete(null);
+  };
 
   // Require 5px movement before starting a drag — so clicks still work
   const sensors = useSensors(
@@ -149,8 +176,8 @@ export function Sidebar({ onOpenImport }: { onOpenImport?: () => void }) {
                 onToggle={toggleFolder}
                 onOpenDoc={openDocument}
                 onCreateDoc={createDocument}
-                onDeleteDoc={deleteDocument}
-                onDeleteFolder={deleteFolder}
+                onDeleteDoc={requestDeleteDoc}
+                onDeleteFolder={requestDeleteFolder}
               />
             ))}
 
@@ -162,7 +189,7 @@ export function Sidebar({ onOpenImport }: { onOpenImport?: () => void }) {
                 depth={0}
                 isActive={activeDocumentId === doc.id}
                 onOpen={openDocument}
-                onDelete={deleteDocument}
+                onDelete={requestDeleteDoc}
               />
             ))}
           </div>
@@ -215,6 +242,49 @@ export function Sidebar({ onOpenImport }: { onOpenImport?: () => void }) {
           </div>
         ) : null}
       </DragOverlay>
+
+      {/* Confirm delete modal */}
+      {pendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setPendingDelete(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl w-[360px] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 pt-5 pb-3 flex items-start gap-3">
+              <div className="p-2 rounded-full bg-red-50 text-red-500 shrink-0 mt-0.5">
+                <AlertTriangle size={18} />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">
+                  Delete {pendingDelete.type === "doc" ? "document" : "folder"}?
+                </h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  <strong className="text-foreground">{pendingDelete.name}</strong>{" "}
+                  will be permanently deleted.
+                  {pendingDelete.type === "folder" && " Documents inside will be moved to root."}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-3 border-t border-border">
+              <button
+                onClick={() => setPendingDelete(null)}
+                className="px-3 py-1.5 text-xs rounded-lg text-foreground hover:bg-gray-100 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="px-3 py-1.5 text-xs rounded-lg text-white bg-red-500 hover:bg-red-600 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </DndContext>
   );
 }
