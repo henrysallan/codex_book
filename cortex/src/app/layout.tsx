@@ -9,7 +9,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Cortex",
+  title: "Codex",
   description: "A personal knowledge operating system",
 };
 

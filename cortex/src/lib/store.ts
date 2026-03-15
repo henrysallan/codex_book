@@ -5,8 +5,13 @@ import {
   Folder,
   OpenTab,
   ChatMessage,
+  ContextItem,
+  Annotation,
+  AnnotationMessage,
   DbFolder,
   DbDocument,
+  TodoItem,
+  QuickNoteItem,
 } from "./types";
 import {
   fetchFolders,
@@ -19,11 +24,26 @@ import {
   deleteFolder as dbDeleteFolder,
   renameFolder as dbRenameFolder,
   moveDocument as dbMoveDocument,
+  moveFolder as dbMoveFolder,
+  setParentDocument as dbSetParentDocument,
   propagatePageLinkTitle,
+  propagateDatabaseRowTitle,
   buildFolderTree,
   getRootDocuments,
   dbDocumentToDocument,
+  createAnnotation as dbCreateAnnotation,
+  fetchAnnotations as dbFetchAnnotations,
+  updateAnnotationMessages as dbUpdateAnnotationMessages,
+  deleteAnnotation as dbDeleteAnnotation,
+  ensureTodoDocument,
+  ensureTodayDailyDocument,
+  ensureQuickNoteParentDocument,
+  createQuickNote as dbCreateQuickNote,
+  fetchTodayQuickNotes,
+  syncQuickNoteDatabases,
+  syncDailyParentDatabase,
 } from "./db";
+import { v4 as uuidv4 } from "uuid";
 
 interface AppState {
   // Data
@@ -35,14 +55,30 @@ interface AppState {
   activeDocument: Document | null;
   isChatOpen: boolean;
   chatMessages: ChatMessage[];
+  contextItems: ContextItem[];
+  activeAnnotation: Annotation | null;
+  documentAnnotations: Annotation[];
   isLoading: boolean;
 
+  // Navigation history
+  navHistory: string[];
+  navIndex: number;
+  _isNavigating: boolean;
+
+  // Caches
+  _documentCache: Map<string, Document>;
+  _annotationsCache: Map<string, Annotation[]>;
+
   // Raw db data for rebuilding tree
-  _dbFolders: DbFolder[];
+  _dbFolders: DbFolder[];  
   _dbDocuments: DbDocument[];
 
   // Actions
   initialize: () => Promise<void>;
+  goBack: () => Promise<void>;
+  goForward: () => Promise<void>;
+  canGoBack: () => boolean;
+  canGoForward: () => boolean;
   toggleFolder: (folderId: string) => void;
   openDocument: (docId: string) => Promise<void>;
   closeTab: (docId: string) => void;
@@ -58,12 +94,43 @@ interface AppState {
       subtitle: string | null;
       content: string;
       tags: string[];
+      settings: import("./types").NoteSettings;
     }>
   ) => Promise<void>;
   deleteDocument: (id: string) => Promise<void>;
   moveDocument: (docId: string, folderId: string | null) => Promise<void>;
+  moveFolder: (folderId: string, parentId: string | null, parentDocumentId?: string | null) => Promise<void>;
+  setParentDocument: (docId: string, parentDocId: string | null) => Promise<void>;
   toggleChat: () => void;
   addChatMessage: (message: Omit<ChatMessage, "id" | "timestamp">) => void;
+  addContextItem: (item: ContextItem) => void;
+  removeContextItem: (item: ContextItem) => void;
+  clearContextItems: () => void;
+  openAnnotationChat: (
+    documentId: string,
+    blockId: string | null,
+    highlightedText: string
+  ) => Promise<void>;
+  closeAnnotationChat: () => void;
+  addAnnotationMessage: (content: string, role: "user" | "assistant") => Promise<void>;
+  loadAnnotations: (documentId: string) => Promise<void>;
+  openExistingAnnotation: (annotation: Annotation) => void;
+  deleteAnnotationById: (id: string) => Promise<void>;
+  openDriveFile: (file: { id: string; name: string; mimeType: string; webViewLink: string | null }) => void;
+
+  // Dashboard
+  todoDocId: string | null;
+  todoItems: TodoItem[];
+  dailyDocId: string | null;
+  dailyDocTitle: string;
+  dailyDocContent: string;
+  quickNoteParentId: string | null;
+  quickNotes: QuickNoteItem[];
+  dashboardReady: boolean;
+  initDashboard: () => Promise<void>;
+  addTodo: (text: string) => Promise<void>;
+  toggleTodo: (blockId: string) => Promise<void>;
+  addQuickNote: (text: string) => Promise<void>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -75,9 +142,48 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeDocument: null,
   isChatOpen: false,
   chatMessages: [],
+  contextItems: [],
+  activeAnnotation: null,
+  documentAnnotations: [],
   isLoading: true,
+  navHistory: [],
+  navIndex: -1,
+  _isNavigating: false,
+  _documentCache: new Map(),
+  _annotationsCache: new Map(),
   _dbFolders: [],
   _dbDocuments: [],
+
+  // Dashboard state
+  todoDocId: null,
+  todoItems: [],
+  dailyDocId: null,
+  dailyDocTitle: "",
+  dailyDocContent: "[]",
+  quickNoteParentId: null,
+  quickNotes: [],
+  dashboardReady: false,
+
+  canGoBack: () => get().navIndex > 0,
+  canGoForward: () => get().navIndex < get().navHistory.length - 1,
+
+  goBack: async () => {
+    const { navIndex, navHistory } = get();
+    if (navIndex <= 0) return;
+    const newIndex = navIndex - 1;
+    set({ navIndex: newIndex, _isNavigating: true });
+    await get().setActiveTab(navHistory[newIndex]);
+    set({ _isNavigating: false });
+  },
+
+  goForward: async () => {
+    const { navIndex, navHistory } = get();
+    if (navIndex >= navHistory.length - 1) return;
+    const newIndex = navIndex + 1;
+    set({ navIndex: newIndex, _isNavigating: true });
+    await get().setActiveTab(navHistory[newIndex]);
+    set({ _isNavigating: false });
+  },
 
   initialize: async () => {
     try {
@@ -88,7 +194,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const expandedIds = get().expandedFolderIds;
       const folders = buildFolderTree(dbFolders, dbDocuments, expandedIds);
-      const rootDocs = getRootDocuments(dbDocuments);
+      const rootDocs = getRootDocuments(dbDocuments, dbFolders);
 
       set({
         _dbFolders: dbFolders,
@@ -112,7 +218,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       newExpanded.add(folderId);
     }
     const folders = buildFolderTree(_dbFolders, _dbDocuments, newExpanded);
-    const rootDocs = getRootDocuments(_dbDocuments);
+    const rootDocs = getRootDocuments(_dbDocuments, _dbFolders);
     set({
       expandedFolderIds: newExpanded,
       folders,
@@ -121,21 +227,36 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   openDocument: async (docId: string) => {
-    const { openTabs } = get();
+    const { openTabs, _isNavigating, navHistory, navIndex } = get();
     const existing = openTabs.find((t) => t.documentId === docId);
+
+    // Push to nav history (unless we're navigating via back/forward)
+    if (!_isNavigating) {
+      const trimmed = navHistory.slice(0, navIndex + 1);
+      set({ navHistory: [...trimmed, docId], navIndex: trimmed.length });
+    }
 
     if (!existing) {
       const dbDoc = await fetchDocument(docId);
       if (!dbDoc) return;
 
       const doc = dbDocumentToDocument(dbDoc);
+      // Cache the document
+      const cache = new Map(get()._documentCache);
+      cache.set(doc.id, doc);
       set({
         openTabs: [...openTabs, { documentId: doc.id, title: doc.title }],
         activeDocumentId: doc.id,
         activeDocument: doc,
+        activeAnnotation: null,
+        _documentCache: cache,
       });
+      await get().loadAnnotations(doc.id);
     } else {
+      // Skip the history push inside setActiveTab since we already pushed above
+      set({ _isNavigating: true });
       await get().setActiveTab(docId);
+      set({ _isNavigating: false });
     }
   },
 
@@ -157,18 +278,81 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     set({ openTabs: newTabs });
+
+    // Remove from caches
+    const docCache = new Map(get()._documentCache);
+    const annCache = new Map(get()._annotationsCache);
+    docCache.delete(docId);
+    annCache.delete(docId);
+    set({ _documentCache: docCache, _annotationsCache: annCache });
   },
 
   setActiveTab: async (docId: string) => {
+    const { _isNavigating, navHistory, navIndex, _documentCache, _annotationsCache } = get();
+    // Push to nav history (unless we're navigating via back/forward)
+    if (!_isNavigating) {
+      const trimmed = navHistory.slice(0, navIndex + 1);
+      set({ navHistory: [...trimmed, docId], navIndex: trimmed.length });
+    }
+
+    // Instantly swap to cached version if available
+    const cached = _documentCache.get(docId);
+    const cachedAnnotations = _annotationsCache.get(docId);
+    if (cached) {
+      set({
+        activeDocumentId: cached.id,
+        activeDocument: cached,
+        activeAnnotation: null,
+        ...(cachedAnnotations ? { documentAnnotations: cachedAnnotations } : {}),
+      });
+      // Refresh from DB in the background (don't await)
+      fetchDocument(docId).then((dbDoc) => {
+        if (!dbDoc) return;
+        const doc = dbDocumentToDocument(dbDoc);
+        const cache = new Map(get()._documentCache);
+        cache.set(doc.id, doc);
+        // Only update if still viewing this doc
+        if (get().activeDocumentId === doc.id) {
+          set({ activeDocument: doc, _documentCache: cache });
+        } else {
+          set({ _documentCache: cache });
+        }
+      });
+      get().loadAnnotations(docId); // fire-and-forget
+      return;
+    }
+
+    // No cache — fetch and cache
     const dbDoc = await fetchDocument(docId);
     if (!dbDoc) return;
     const doc = dbDocumentToDocument(dbDoc);
-    set({ activeDocumentId: doc.id, activeDocument: doc });
+    const cache = new Map(get()._documentCache);
+    cache.set(doc.id, doc);
+    set({ activeDocumentId: doc.id, activeDocument: doc, activeAnnotation: null, _documentCache: cache });
+    await get().loadAnnotations(doc.id);
   },
 
   createFolder: async (name: string, parentId: string | null = null) => {
-    await dbCreateFolder(name, parentId);
-    await get().initialize();
+    // Optimistic: inject folder into local state immediately
+    const now = new Date().toISOString();
+    const tempFolder: DbFolder = {
+      id: uuidv4(),
+      name,
+      parent_id: parentId,
+      parent_document_id: null,
+      user_id: "local",
+      position: 0,
+      created_at: now,
+      updated_at: now,
+    };
+    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const newFolders = [..._dbFolders, tempFolder];
+    set({
+      _dbFolders: newFolders,
+      folders: buildFolderTree(newFolders, _dbDocuments, expandedFolderIds),
+    });
+    // Persist in background then reconcile
+    dbCreateFolder(name, parentId).then(() => get().initialize()).catch(console.error);
   },
 
   renameFolder: async (id: string, name: string) => {
@@ -182,8 +366,40 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   createDocument: async (folderId: string | null = null) => {
+    // Optimistic: inject doc into local state immediately
+    const now = new Date().toISOString();
+    const tempId = uuidv4();
+    const tempDoc: DbDocument = {
+      id: tempId,
+      title: "Untitled",
+      subtitle: null,
+      folder_id: folderId,
+      parent_document_id: null,
+      user_id: "local",
+      content: "[]",
+      tags: [],
+      settings: {},
+      doc_type: "note",
+      position: 0,
+      created_at: now,
+      updated_at: now,
+    };
+    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const newDocs = [..._dbDocuments, tempDoc];
+    set({
+      _dbDocuments: newDocs,
+      folders: buildFolderTree(_dbFolders, newDocs, expandedFolderIds),
+      rootDocuments: getRootDocuments(newDocs, _dbFolders),
+    });
+    // Persist and open — must await so we return the real id
     const dbDoc = await dbCreateDocument(folderId);
-    await get().initialize();
+    // Reconcile: swap temp doc for the real one
+    const reconciledDocs = get()._dbDocuments.map((d) => (d.id === tempId ? dbDoc : d));
+    set({
+      _dbDocuments: reconciledDocs,
+      folders: buildFolderTree(get()._dbFolders, reconciledDocs, get().expandedFolderIds),
+      rootDocuments: getRootDocuments(reconciledDocs, get()._dbFolders),
+    });
     await get().openDocument(dbDoc.id);
     return dbDoc.id;
   },
@@ -191,12 +407,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveDocument: async (id, updates) => {
     await dbUpdateDocument(id, updates);
 
-    // Update active document if it's the one being saved
-    const { activeDocument, openTabs } = get();
+    // Update active document and cache
+    const { activeDocument, openTabs, _documentCache } = get();
     if (activeDocument && activeDocument.id === id) {
-      set({
-        activeDocument: { ...activeDocument, ...updates },
-      });
+      const updated = { ...activeDocument, ...updates };
+      const cache = new Map(_documentCache);
+      cache.set(id, updated);
+      set({ activeDocument: updated, _documentCache: cache });
+    } else if (_documentCache.has(id)) {
+      const cache = new Map(_documentCache);
+      cache.set(id, { ...(_documentCache.get(id) as Document), ...updates });
+      set({ _documentCache: cache });
     }
 
     // Update tab title if title changed
@@ -213,6 +434,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       } catch (err) {
         console.error("Failed to propagate page link title:", err);
       }
+
+      // Propagate the new title to any database row that links to this doc
+      try {
+        await propagateDatabaseRowTitle(id, updates.title);
+      } catch (err) {
+        console.error("Failed to propagate database row title:", err);
+      }
     }
 
     // Refresh tree
@@ -226,11 +454,62 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   moveDocument: async (docId: string, folderId: string | null) => {
-    await dbMoveDocument(docId, folderId);
-    await get().initialize();
+    // Optimistic: update folder_id in local state
+    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const newDocs = _dbDocuments.map((d) =>
+      d.id === docId ? { ...d, folder_id: folderId, parent_document_id: null } : d
+    );
+    set({
+      _dbDocuments: newDocs,
+      folders: buildFolderTree(_dbFolders, newDocs, expandedFolderIds),
+      rootDocuments: getRootDocuments(newDocs, _dbFolders),
+    });
+    dbMoveDocument(docId, folderId).then(() => get().initialize()).catch(console.error);
   },
 
-  toggleChat: () => set((s) => ({ isChatOpen: !s.isChatOpen })),
+  moveFolder: async (folderId: string, parentId: string | null, parentDocumentId: string | null = null) => {
+    // Optimistic: update parent_id / parent_document_id in local state
+    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const newFolders = _dbFolders.map((f) =>
+      f.id === folderId
+        ? { ...f, parent_id: parentId, parent_document_id: parentDocumentId }
+        : f
+    );
+    set({
+      _dbFolders: newFolders,
+      folders: buildFolderTree(newFolders, _dbDocuments, expandedFolderIds),
+      rootDocuments: getRootDocuments(_dbDocuments, newFolders),
+    });
+    dbMoveFolder(folderId, parentId, parentDocumentId).then(() => get().initialize()).catch(console.error);
+  },
+
+  setParentDocument: async (docId: string, parentDocId: string | null) => {
+    // Optimistic: update parent_document_id in local state
+    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const parentDoc = parentDocId ? _dbDocuments.find((d) => d.id === parentDocId) : null;
+    const newDocs = _dbDocuments.map((d) =>
+      d.id === docId
+        ? {
+            ...d,
+            parent_document_id: parentDocId,
+            folder_id: parentDoc ? parentDoc.folder_id : d.folder_id,
+          }
+        : d
+    );
+    set({
+      _dbDocuments: newDocs,
+      folders: buildFolderTree(_dbFolders, newDocs, expandedFolderIds),
+      rootDocuments: getRootDocuments(newDocs, _dbFolders),
+    });
+    dbSetParentDocument(docId, parentDocId).then(() => get().initialize()).catch(console.error);
+  },
+
+  toggleChat: () =>
+    set((s) => ({
+      isChatOpen: !s.isChatOpen,
+      // Close annotation chat when opening main chat
+      activeAnnotation: !s.isChatOpen ? null : s.activeAnnotation,
+    })),
 
   addChatMessage: (msg) => {
     const message: ChatMessage = {
@@ -240,4 +519,352 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
     set((s) => ({ chatMessages: [...s.chatMessages, message] }));
   },
+
+  addContextItem: (item) => {
+    set((s) => {
+      // Prevent duplicates
+      const exists = s.contextItems.some((ci) => {
+        if (ci.type === "document" && item.type === "document")
+          return ci.docId === item.docId;
+        if (ci.type === "block" && item.type === "block")
+          return ci.blockId === item.blockId;
+        return false;
+      });
+      if (exists) return s;
+      return { contextItems: [...s.contextItems, item] };
+    });
+  },
+
+  removeContextItem: (item) => {
+    set((s) => ({
+      contextItems: s.contextItems.filter((ci) => {
+        if (ci.type === "document" && item.type === "document")
+          return ci.docId !== item.docId;
+        if (ci.type === "block" && item.type === "block")
+          return ci.blockId !== item.blockId;
+        return true;
+      }),
+    }));
+  },
+
+  clearContextItems: () => set({ contextItems: [] }),
+
+  openAnnotationChat: async (documentId, blockId, highlightedText) => {
+    // Close main chat panel
+    set({ isChatOpen: false });
+
+    // Check if annotation already exists for this block
+    const { documentAnnotations } = get();
+    const existing = blockId
+      ? documentAnnotations.find((a) => a.blockId === blockId)
+      : null;
+
+    if (existing) {
+      set({ activeAnnotation: existing });
+      return;
+    }
+
+    // Create annotation in DB
+    try {
+      const dbAnnotation = await dbCreateAnnotation(documentId, blockId, highlightedText);
+      const annotation: Annotation = {
+        id: dbAnnotation.id,
+        documentId: dbAnnotation.document_id,
+        blockId: dbAnnotation.block_id,
+        highlightedText: dbAnnotation.highlighted_text,
+        messages: dbAnnotation.messages,
+        createdAt: dbAnnotation.created_at,
+        updatedAt: dbAnnotation.updated_at,
+      };
+      set({
+        activeAnnotation: annotation,
+        documentAnnotations: [...get().documentAnnotations, annotation],
+      });
+    } catch (err) {
+      console.error("Failed to create annotation:", err);
+    }
+  },
+
+  closeAnnotationChat: () => {
+    set({ activeAnnotation: null });
+  },
+
+  addAnnotationMessage: async (content, role) => {
+    const { activeAnnotation, documentAnnotations } = get();
+    if (!activeAnnotation) return;
+
+    const newMessage: AnnotationMessage = {
+      role,
+      content,
+      timestamp: new Date().toISOString(),
+    };
+    const updatedMessages = [...activeAnnotation.messages, newMessage];
+    const updatedAnnotation = {
+      ...activeAnnotation,
+      messages: updatedMessages,
+    };
+    set({
+      activeAnnotation: updatedAnnotation,
+      documentAnnotations: documentAnnotations.map((a) =>
+        a.id === activeAnnotation.id ? updatedAnnotation : a
+      ),
+    });
+
+    // Persist to DB
+    try {
+      await dbUpdateAnnotationMessages(activeAnnotation.id, updatedMessages);
+    } catch (err) {
+      console.error("Failed to save annotation message:", err);
+    }
+  },
+
+  loadAnnotations: async (documentId) => {
+    try {
+      const dbAnnotations = await dbFetchAnnotations(documentId); 
+      const annotations: Annotation[] = dbAnnotations.map((a) => ({
+        id: a.id,
+        documentId: a.document_id,
+        blockId: a.block_id,
+        highlightedText: a.highlighted_text,
+        messages: a.messages,
+        createdAt: a.created_at,
+        updatedAt: a.updated_at,
+      }));
+      set({ documentAnnotations: annotations });
+      // Cache annotations
+      const aCache = new Map(get()._annotationsCache);
+      aCache.set(documentId, annotations);
+      set({ _annotationsCache: aCache });
+    } catch (err) {
+      console.error("Failed to load annotations:", err);
+    }
+  },
+
+  openExistingAnnotation: (annotation) => {
+    set({ isChatOpen: false, activeAnnotation: annotation });
+  },
+
+  deleteAnnotationById: async (id) => {
+    const { activeAnnotation, documentAnnotations } = get();
+    // Close chat if this annotation is active
+    if (activeAnnotation?.id === id) {
+      set({ activeAnnotation: null });
+    }
+    // Remove from local list
+    set({
+      documentAnnotations: documentAnnotations.filter((a) => a.id !== id),
+    });
+    // Delete from DB
+    try {
+      await dbDeleteAnnotation(id);
+    } catch (err) {
+      console.error("Failed to delete annotation:", err);
+    }
+  },
+
+  openDriveFile: (file) => {
+    const tabId = `drive:${file.id}`;
+    const { openTabs } = get();
+    const existing = openTabs.find((t) => t.documentId === tabId);
+
+    if (!existing) {
+      set({
+        openTabs: [
+          ...openTabs,
+          {
+            documentId: tabId,
+            title: file.name,
+            driveFile: {
+              fileId: file.id,
+              mimeType: file.mimeType,
+              webViewLink: file.webViewLink,
+            },
+          },
+        ],
+        activeDocumentId: tabId,
+        activeDocument: null,
+        activeAnnotation: null,
+      });
+    } else {
+      set({
+        activeDocumentId: tabId,
+        activeDocument: null,
+        activeAnnotation: null,
+      });
+    }
+  },
+
+  // ── Dashboard actions ──────────────────────────────────────────
+
+  initDashboard: async () => {
+    try {
+      // Run todo + daily in parallel, but sequence quick notes to avoid
+      // race condition where multiple parents get created via localStorage
+      const [todoDoc, dailyDoc] = await Promise.all([
+        ensureTodoDocument(),
+        ensureTodayDailyDocument(),
+      ]);
+      const quickNoteParent = await ensureQuickNoteParentDocument();
+      const todayQuickNotes = await fetchTodayQuickNotes();
+
+      // Sync database blocks in Daily Documents parent + Quick Notes parent
+      const dailyParentId = dailyDoc.parent_document_id;
+      if (dailyParentId) {
+        await syncDailyParentDatabase(dailyParentId);
+      }
+      await syncQuickNoteDatabases(quickNoteParent.id);
+
+      // Parse todo items from the todo document content
+      const todoItems = parseTodoItems(todoDoc.content);
+
+      const quickNotes: QuickNoteItem[] = todayQuickNotes.map((d) => ({
+        docId: d.id,
+        title: d.title,
+        createdAt: d.created_at,
+      }));
+
+      set({
+        todoDocId: todoDoc.id,
+        todoItems,
+        dailyDocId: dailyDoc.id,
+        dailyDocTitle: dailyDoc.title,
+        dailyDocContent: dailyDoc.content,
+        quickNoteParentId: quickNoteParent.id,
+        quickNotes,
+        dashboardReady: true,
+      });
+    } catch (err) {
+      console.error("Failed to initialize dashboard:", err);
+      set({ dashboardReady: true });
+    }
+  },
+
+  addTodo: async (text: string) => {
+    const { todoDocId, todoItems } = get();
+    if (!todoDocId || !text.trim()) return;
+
+    const blockId = uuidv4();
+    const newItem: TodoItem = { blockId, text: text.trim(), checked: false };
+
+    // Optimistic UI update — prepend
+    set({ todoItems: [newItem, ...todoItems] });
+
+    // Build the new block and persist
+    try {
+      const dbDoc = await fetchDocument(todoDocId);
+      if (!dbDoc) return;
+      const blocks = safeParseBlocks(dbDoc.content);
+      const newBlock = makeTodoBlock(blockId, text.trim());
+      blocks.unshift(newBlock);
+      await dbUpdateDocument(todoDocId, { content: JSON.stringify(blocks) });
+
+      // Update cache
+      const cache = new Map(get()._documentCache);
+      if (cache.has(todoDocId)) {
+        cache.set(todoDocId, { ...cache.get(todoDocId)!, content: JSON.stringify(blocks) });
+        set({ _documentCache: cache });
+      }
+    } catch (err) {
+      console.error("Failed to add todo:", err);
+    }
+  },
+
+  toggleTodo: async (blockId: string) => {
+    const { todoDocId, todoItems } = get();
+    if (!todoDocId) return;
+
+    // Optimistic UI update
+    set({
+      todoItems: todoItems.map((t) =>
+        t.blockId === blockId ? { ...t, checked: !t.checked } : t
+      ),
+    });
+
+    try {
+      const dbDoc = await fetchDocument(todoDocId);
+      if (!dbDoc) return;
+      const blocks = safeParseBlocks(dbDoc.content);
+      const block = blocks.find((b: Record<string, unknown>) => b.id === blockId);
+      if (block && block.props) {
+        (block.props as Record<string, unknown>).checked =
+          !(block.props as Record<string, unknown>).checked;
+      }
+      await dbUpdateDocument(todoDocId, { content: JSON.stringify(blocks) });
+
+      // Update cache
+      const cache = new Map(get()._documentCache);
+      if (cache.has(todoDocId)) {
+        cache.set(todoDocId, { ...cache.get(todoDocId)!, content: JSON.stringify(blocks) });
+        set({ _documentCache: cache });
+      }
+    } catch (err) {
+      console.error("Failed to toggle todo:", err);
+    }
+  },
+
+  addQuickNote: async (text: string) => {
+    if (!text.trim()) return;
+
+    try {
+      const newDoc = await dbCreateQuickNote(text.trim());
+      const newItem: QuickNoteItem = {
+        docId: newDoc.id,
+        title: newDoc.title,
+        createdAt: newDoc.created_at,
+      };
+
+      // Prepend to the list (newest first)
+      set({ quickNotes: [newItem, ...get().quickNotes] });
+
+      // Refresh sidebar tree so the new doc shows up
+      await get().initialize();
+    } catch (err) {
+      console.error("Failed to create quick note:", err);
+    }
+  },
 }));
+
+// ── Helpers for todo block parsing ──────────────────────────────
+
+function safeParseBlocks(content: string): Record<string, unknown>[] {
+  try {
+    const parsed = JSON.parse(content);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseTodoItems(content: string): TodoItem[] {
+  const blocks = safeParseBlocks(content);
+  const items: TodoItem[] = [];
+  for (const b of blocks) {
+    if (b.type !== "checkListItem") continue;
+    const props = b.props as Record<string, unknown> | undefined;
+    const checked = !!props?.checked;
+    // Extract text from content array
+    let text = "";
+    if (Array.isArray(b.content)) {
+      text = (b.content as Array<Record<string, unknown>>)
+        .map((c) => (typeof c === "string" ? c : (c.text as string) || ""))
+        .join("");
+    }
+    items.push({ blockId: b.id as string, text, checked });
+  }
+  return items;
+}
+
+function makeTodoBlock(id: string, text: string): Record<string, unknown> {
+  return {
+    id,
+    type: "checkListItem",
+    props: {
+      textColor: "default",
+      backgroundColor: "default",
+      textAlignment: "left",
+      checked: false,
+    },
+    content: [{ type: "text", text, styles: {} }],
+    children: [],
+  };
+}

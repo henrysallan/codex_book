@@ -38,6 +38,13 @@ body {
   font-family: var(--font-inter), "Inter", -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
 
+.bn-editor .bn-default-styles,
+.bn-editor .bn-default-styles p,
+.bn-editor .bn-default-styles li,
+.bn-editor [class*="bn-block-content"] {
+  font-size: var(--note-font-size, 16px) !important;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
@@ -55,4 +62,212 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #a3a3a3;
+}
+
+/* ─── Database table block ─── */
+.db-table {
+  border-spacing: 0;
+  border-top: 1px solid #e0e0e0;
+  border-bottom: 1px solid #e0e0e0;
+  min-width: 100%;
+  width: max-content;
+  overflow: visible;
+}
+.db-table thead,
+.db-table tbody,
+.db-table tr,
+.db-table th,
+.db-table td {
+  overflow: visible;
+}
+.db-th,
+.db-td {
+  border-bottom: 1px solid #e0e0e0;
+  border-right: 1px solid #e0e0e0;
+  padding: 0.5rem;
+  position: relative;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+  color: #424242;
+  margin: 0;
+}
+.db-th:last-child,
+.db-td:last-child {
+  border-right: 0;
+}
+.db-th {
+  color: #9e9e9e;
+  font-weight: normal;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  user-select: none;
+}
+.db-th:hover {
+  background-color: #f5f5f5;
+}
+.db-add-col {
+  width: 36px;
+  text-align: center;
+  padding: 4px;
+}
+.db-add-col:hover {
+  background-color: #f5f5f5;
+}
+.db-resizer {
+  display: inline-block;
+  background: transparent;
+  width: 8px;
+  height: 100%;
+  position: absolute;
+  right: 0;
+  top: 0;
+  transform: translateX(50%);
+  z-index: 1;
+  cursor: col-resize;
+  touch-action: none;
+}
+.db-resizer:hover,
+.db-resizer.isResizing {
+  background-color: #8ecae6;
+}
+.db-th:last-child .db-resizer {
+  display: none;
+}
+.db-drag-handle {
+  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: white;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #e0e0e0;
+  border-radius: 3px;
+  cursor: grab;
+  touch-action: none;
+  flex-shrink: 0;
+  color: #9e9e9e;
+}
+.db-th:hover .db-drag-handle {
+  opacity: 1;
+}
+.db-drag-handle:hover {
+  opacity: 1;
+  background: #f5f5f5;
+}
+
+/* ─── Globally suppress database block selection outline ─── */
+[data-content-type="database"].ProseMirror-selectednode > *,
+.ProseMirror-selectednode > [data-content-type="database"] > *,
+[data-content-type="database"] .ProseMirror-selectednode,
+.bn-block-content[data-content-type="database"].ProseMirror-selectednode > *,
+.ProseMirror-selectednode > .bn-block-content[data-content-type="database"] > * {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* ─── Read-only index doc: suppress all block selection ─── */
+.read-only-index .ProseMirror-selectednode,
+.read-only-index .ProseMirror-selectednode > *,
+.read-only-index .bn-block-content.ProseMirror-selectednode > *,
+.read-only-index .ProseMirror-selectednode > .bn-block-content > *,
+.read-only-index .ProseMirror-selectednode .bn-file-block-content-wrapper {
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: unset !important;
+}
+.read-only-index .bn-editor {
+  cursor: default !important;
+}
+.read-only-index .bn-editor * {
+  cursor: default !important;
+  caret-color: transparent !important;
+}
+.read-only-index .bn-editor a,
+.read-only-index .bn-editor a * {
+  cursor: pointer !important;
+}
+
+/* ─── PDF viewer (react-pdf) ─── */
+/* Inline the essential TextLayer styles so they're loaded eagerly
+   (Turbopack may not inject CSS from dynamically-imported components). */
+:root {
+  --react-pdf-text-layer: 1;
+  --highlight-bg-color: rgba(180, 0, 170, 1);
+  --highlight-selected-bg-color: rgba(0, 100, 0, 1);
+}
+
+.textLayer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 2;
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  margin: 0;
+  transform-origin: 0 0;
+}
+
+.textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.textLayer .highlight {
+  margin: -1px;
+  padding: 1px;
+  background-color: var(--highlight-bg-color);
+  border-radius: 4px;
+}
+
+.textLayer .highlight.appended {
+  position: initial;
+}
+
+.textLayer .highlight.begin {
+  border-radius: 4px 0 0 4px;
+}
+
+.textLayer .highlight.end {
+  border-radius: 0 4px 4px 0;
+}
+
+.textLayer .highlight.middle {
+  border-radius: 0;
+}
+
+.textLayer .highlight.selected {
+  background-color: var(--highlight-selected-bg-color);
+}
+
+.textLayer br::selection {
+  background: transparent;
+}
+
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: -1;
+  cursor: default;
+  user-select: none;
+}
+
+.textLayer.selecting .endOfContent {
+  top: 0;
+}
+
+.textLayer ::selection {
+  background: rgba(59, 130, 246, 0.3);
 }

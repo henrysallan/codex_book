@@ -24,6 +24,8 @@ create table if not exists documents (
   user_id text not null default 'local',
   content text not null default '[]',
   tags text[] not null default '{}',
+  settings jsonb not null default '{}'::jsonb,
+  parent_document_id uuid references documents(id) on delete set null,
   position integer not null default 0,
   created_at timestamp with time zone default now(),
   updated_at timestamp with time zone default now()
@@ -32,6 +34,7 @@ create table if not exists documents (
 -- Indexes for performance
 create index if not exists idx_folders_parent on folders(parent_id);
 create index if not exists idx_documents_folder on documents(folder_id);
+create index if not exists idx_documents_parent_doc on documents(parent_document_id);
 create index if not exists idx_documents_tags on documents using gin(tags);
 
 -- Full text search index on documents
@@ -109,3 +112,26 @@ $$ language plpgsql;
 -- alter table folders enable row level security;
 -- alter table documents enable row level security;
 -- alter table backlinks enable row level security;
+
+-- Attachments table — stores Google Drive file references linked to documents
+create table if not exists attachments (
+  id uuid primary key default uuid_generate_v4(),
+  document_id uuid not null references documents(id) on delete cascade,
+  user_id text not null default 'local',
+  file_name text not null,
+  mime_type text not null default 'application/pdf',
+  file_size bigint,
+  drive_file_id text not null,
+  drive_web_view_link text,
+  created_at timestamp with time zone default now()
+);
+
+create index if not exists idx_attachments_document on attachments(document_id);
+create index if not exists idx_attachments_drive_file on attachments(drive_file_id);
+
+-- Store Google OAuth refresh tokens for Drive API access
+create table if not exists user_google_tokens (
+  user_id text primary key,
+  refresh_token text not null,
+  updated_at timestamp with time zone default now()
+);
