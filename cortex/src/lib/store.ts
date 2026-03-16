@@ -45,6 +45,98 @@ import {
 } from "./db";
 import { v4 as uuidv4 } from "uuid";
 
+// ─── LocalStorage Cache Helpers ───
+
+const CACHE_KEYS = {
+  DB_FOLDERS: "cortex:cache:dbFolders",
+  DB_DOCUMENTS: "cortex:cache:dbDocuments",
+  OPEN_TABS: "cortex:cache:openTabs",
+  ACTIVE_DOC_ID: "cortex:cache:activeDocumentId",
+  EXPANDED_FOLDERS: "cortex:cache:expandedFolderIds",
+  TIMESTAMP: "cortex:cache:timestamp",
+} as const;
+
+function cacheWrite(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // localStorage full or unavailable — silently ignore
+  }
+}
+
+function cacheRead<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Strip heavy fields (content, settings) from DbDocuments for sidebar cache. */
+function stripDocContent(docs: DbDocument[]): DbDocument[] {
+  return docs.map((d) => ({
+    ...d,
+    content: "[]", // don't cache full content — just need metadata for sidebar tree
+  }));
+}
+
+/** Persist sidebar hierarchy + workspace state to localStorage. */
+function persistSidebarCache(state: {
+  _dbFolders: DbFolder[];
+  _dbDocuments: DbDocument[];
+}): void {
+  cacheWrite(CACHE_KEYS.DB_FOLDERS, state._dbFolders);
+  cacheWrite(CACHE_KEYS.DB_DOCUMENTS, stripDocContent(state._dbDocuments));
+  cacheWrite(CACHE_KEYS.TIMESTAMP, Date.now());
+}
+
+/** Persist open tabs and active document to localStorage. */
+function persistWorkspaceState(state: {
+  openTabs: OpenTab[];
+  activeDocumentId: string | null;
+  expandedFolderIds: Set<string>;
+}): void {
+  cacheWrite(CACHE_KEYS.OPEN_TABS, state.openTabs);
+  cacheWrite(CACHE_KEYS.ACTIVE_DOC_ID, state.activeDocumentId);
+  cacheWrite(CACHE_KEYS.EXPANDED_FOLDERS, [...state.expandedFolderIds]);
+}
+
+/** Load cached sidebar data. Returns null if no cache or cache is too old. */
+function loadSidebarCache(): {
+  dbFolders: DbFolder[];
+  dbDocuments: DbDocument[];
+} | null {
+  const ts = cacheRead<number>(CACHE_KEYS.TIMESTAMP);
+  if (!ts) return null;
+  // Consider cache stale after 7 days (we'll always revalidate anyway)
+  const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+  if (Date.now() - ts > MAX_AGE_MS) return null;
+
+  const dbFolders = cacheRead<DbFolder[]>(CACHE_KEYS.DB_FOLDERS);
+  const dbDocuments = cacheRead<DbDocument[]>(CACHE_KEYS.DB_DOCUMENTS);
+  if (!dbFolders || !dbDocuments) return null;
+
+  return { dbFolders, dbDocuments };
+}
+
+function loadWorkspaceState(): {
+  openTabs: OpenTab[];
+  activeDocumentId: string | null;
+  expandedFolderIds: Set<string>;
+} | null {
+  const openTabs = cacheRead<OpenTab[]>(CACHE_KEYS.OPEN_TABS);
+  const activeDocumentId = cacheRead<string | null>(CACHE_KEYS.ACTIVE_DOC_ID);
+  const expandedArr = cacheRead<string[]>(CACHE_KEYS.EXPANDED_FOLDERS);
+  if (!openTabs) return null;
+  return {
+    openTabs,
+    activeDocumentId: activeDocumentId ?? null,
+    expandedFolderIds: new Set(expandedArr ?? []),
+  };
+}
+
 interface AppState {
   // Data
   folders: Folder[];
@@ -187,6 +279,46 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   initialize: async () => {
     try {
+      // ── Phase 1: Instant restore from localStorage cache ──
+      const cached = loadSidebarCache();
+      const workspace = loadWorkspaceState();
+
+      if (cached) {
+        const expandedIds = workspace?.expandedFolderIds ?? get().expandedFolderIds;
+        const folders = buildFolderTree(cached.dbFolders, cached.dbDocuments, expandedIds);
+        const rootDocs = getRootDocuments(cached.dbDocuments, cached.dbFolders);
+
+        set({
+          _dbFolders: cached.dbFolders,
+          _dbDocuments: cached.dbDocuments,
+          folders,
+          rootDocuments: rootDocs,
+          expandedFolderIds: expandedIds,
+          isLoading: false,
+          // Restore open tabs + active doc from cache
+          ...(workspace ? {
+            openTabs: workspace.openTabs,
+            activeDocumentId: workspace.activeDocumentId,
+          } : {}),
+        });
+
+        // If we restored an active doc, load it into the document cache
+        if (workspace?.activeDocumentId && !workspace.activeDocumentId.startsWith("drive:")) {
+          fetchDocument(workspace.activeDocumentId).then((dbDoc) => {
+            if (!dbDoc) return;
+            const doc = dbDocumentToDocument(dbDoc);
+            const cache = new Map(get()._documentCache);
+            cache.set(doc.id, doc);
+            if (get().activeDocumentId === doc.id) {
+              set({ activeDocument: doc, _documentCache: cache });
+            } else {
+              set({ _documentCache: cache });
+            }
+          });
+        }
+      }
+
+      // ── Phase 2: Revalidate from Supabase (always runs) ──
       const [dbFolders, dbDocuments] = await Promise.all([
         fetchFolders(),
         fetchDocuments(),
@@ -203,6 +335,30 @@ export const useAppStore = create<AppState>((set, get) => ({
         rootDocuments: rootDocs,
         isLoading: false,
       });
+
+      // Update the sidebar cache with fresh data
+      persistSidebarCache({ _dbFolders: dbFolders, _dbDocuments: dbDocuments });
+
+      // If tabs were restored from cache, validate they still exist
+      const { openTabs } = get();
+      if (openTabs.length > 0) {
+        const docIds = new Set(dbDocuments.map((d) => d.id));
+        const validTabs = openTabs.filter(
+          (t) => t.driveFile || docIds.has(t.documentId)
+        );
+        if (validTabs.length !== openTabs.length) {
+          set({ openTabs: validTabs });
+          // If active doc was removed, switch to last valid tab
+          if (get().activeDocumentId && !docIds.has(get().activeDocumentId!)) {
+            const lastTab = validTabs[validTabs.length - 1];
+            if (lastTab) {
+              await get().setActiveTab(lastTab.documentId);
+            } else {
+              set({ activeDocumentId: null, activeDocument: null });
+            }
+          }
+        }
+      }
     } catch (err) {
       console.error("Failed to initialize:", err);
       set({ isLoading: false });
@@ -868,3 +1024,35 @@ function makeTodoBlock(id: string, text: string): Record<string, unknown> {
     children: [],
   };
 }
+
+// ─── Auto-persist state changes to localStorage ───
+// Uses Zustand subscribe to watch for changes without modifying individual actions.
+
+let _persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+useAppStore.subscribe((state, prev) => {
+  // Debounce writes to avoid thrashing localStorage on rapid state changes
+  if (_persistTimer) clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(() => {
+    // Persist sidebar hierarchy when folders/documents change
+    if (state._dbFolders !== prev._dbFolders || state._dbDocuments !== prev._dbDocuments) {
+      persistSidebarCache({
+        _dbFolders: state._dbFolders,
+        _dbDocuments: state._dbDocuments,
+      });
+    }
+
+    // Persist workspace state (tabs, active doc, expanded folders)
+    if (
+      state.openTabs !== prev.openTabs ||
+      state.activeDocumentId !== prev.activeDocumentId ||
+      state.expandedFolderIds !== prev.expandedFolderIds
+    ) {
+      persistWorkspaceState({
+        openTabs: state.openTabs,
+        activeDocumentId: state.activeDocumentId,
+        expandedFolderIds: state.expandedFolderIds,
+      });
+    }
+  }, 300);
+});
