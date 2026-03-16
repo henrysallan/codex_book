@@ -1,16 +1,22 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Settings, Minus, Plus } from "lucide-react";
+import { Settings, Minus, Plus, Link, Check, Copy } from "lucide-react";
 import { NoteSettings as NoteSettingsType } from "@/lib/types";
+import { toggleShareLink } from "@/lib/db";
 
 interface NoteSettingsProps {
   settings: NoteSettingsType;
   onChange: (settings: NoteSettingsType) => void;
+  docId?: string;
+  shareSlug?: string | null;
 }
 
-export function NoteSettingsButton({ settings, onChange }: NoteSettingsProps) {
+export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initialShareSlug }: NoteSettingsProps) {
   const [open, setOpen] = useState(false);
+  const [shareSlug, setShareSlug] = useState<string | null>(initialShareSlug ?? null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -133,6 +139,66 @@ export function NoteSettingsButton({ settings, onChange }: NoteSettingsProps) {
               />
             </button>
           </div>
+
+          {/* Share link */}
+          {docId && (
+            <>
+              <hr className="border-border" />
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Link size={11} />
+                    Share link
+                  </label>
+                  <button
+                    disabled={shareLoading}
+                    onClick={async () => {
+                      setShareLoading(true);
+                      try {
+                        const slug = await toggleShareLink(docId, !shareSlug);
+                        setShareSlug(slug);
+                      } finally {
+                        setShareLoading(false);
+                      }
+                    }}
+                    className={`relative w-8 h-[18px] rounded-full transition-colors ${
+                      shareSlug ? "bg-foreground" : "bg-black/15"
+                    } ${shareLoading ? "opacity-50" : ""}`}
+                  >
+                    <span
+                      className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-transform ${
+                        shareSlug ? "left-[15px]" : "left-[2px]"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {shareSlug && (
+                  <button
+                    onClick={() => {
+                      const url = `${window.location.origin}/share/${shareSlug}`;
+                      navigator.clipboard.writeText(url);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                    className="flex items-center gap-1.5 w-full text-xs px-2 py-1.5 rounded-md border border-border hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {copied ? (
+                      <>
+                        <Check size={11} className="text-green-600" />
+                        <span className="text-green-600">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={11} />
+                        <span className="truncate">Copy share link</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
     </>

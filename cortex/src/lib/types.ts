@@ -32,6 +32,7 @@ export interface DbDocument {
   settings: NoteSettings;
   doc_type: DocType;
   position: number;
+  share_slug: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -57,6 +58,7 @@ export interface DocumentMeta {
   tags: string[];
   docType: DocType;
   position: number;
+  shareSlug: string | null;
   createdAt: string;
   updatedAt: string;
   childDocuments?: DocumentMeta[];

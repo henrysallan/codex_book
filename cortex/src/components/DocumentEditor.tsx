@@ -725,7 +725,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
             />
           </div>
           {/* Right: settings */}
-          <NoteSettingsButton settings={noteSettings} onChange={handleSettingsChange} />
+          <NoteSettingsButton settings={noteSettings} onChange={handleSettingsChange} docId={document.id} shareSlug={document.shareSlug} />
         </div>
       </div>
       )}

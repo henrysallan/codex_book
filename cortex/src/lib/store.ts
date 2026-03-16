@@ -537,6 +537,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       settings: {},
       doc_type: "note",
       position: 0,
+      share_slug: null,
       created_at: now,
       updated_at: now,
     };

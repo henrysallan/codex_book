@@ -261,6 +261,7 @@ export async function createDocument(
     settings: {},
     doc_type: docType,
     position: 0,
+    share_slug: null,
     created_at: now,
     updated_at: now,
   };
@@ -302,6 +303,7 @@ export async function updateDocument(
     tags: string[];
     folder_id: string | null;
     settings: import("./types").NoteSettings;
+    share_slug: string | null;
   }>
 ): Promise<DbDocument> {
   if (!isSupabaseConfigured()) {
@@ -465,6 +467,7 @@ export function buildFolderTree(
       tags: d.tags,
       docType: d.doc_type ?? "note",
       position: d.position,
+      shareSlug: d.share_slug ?? null,
       createdAt: d.created_at,
       updatedAt: d.updated_at,
       childDocuments: [],
@@ -521,6 +524,7 @@ export function getRootDocuments(dbDocuments: DbDocument[], dbFolders: DbFolder[
       tags: d.tags,
       docType: d.doc_type ?? "note",
       position: d.position,
+      shareSlug: d.share_slug ?? null,
       createdAt: d.created_at,
       updatedAt: d.updated_at,
       childDocuments: [],
@@ -572,6 +576,7 @@ export function dbDocumentToDocument(db: DbDocument): Document {
     docType: db.doc_type ?? "note",
     settings: db.settings ?? {},
     position: db.position,
+    shareSlug: db.share_slug ?? null,
     createdAt: db.created_at,
     updatedAt: db.updated_at,
     content: db.content,
@@ -1941,4 +1946,51 @@ export async function fetchTodayQuickNotes(): Promise<DbDocument[]> {
 
   if (error) throw error;
   return data ?? [];
+}
+
+// ============================================================
+// Share Links
+// ============================================================
+
+function generateShareSlug(): string {
+  // 8 char alphanumeric slug: url-friendly, ~2.8 trillion possible values
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let slug = "";
+  const arr = new Uint8Array(8);
+  crypto.getRandomValues(arr);
+  for (let i = 0; i < 8; i++) {
+    slug += chars[arr[i] % chars.length];
+  }
+  return slug;
+}
+
+/**
+ * Enable or disable public sharing for a document.
+ * When enabled, generates a unique slug. When disabled, clears it.
+ * Returns the slug (or null if disabled).
+ */
+export async function toggleShareLink(
+  docId: string,
+  enable: boolean
+): Promise<string | null> {
+  const slug = enable ? generateShareSlug() : null;
+
+  if (!isSupabaseConfigured()) {
+    // Local storage fallback
+    const docs = getLocalDocuments();
+    const idx = docs.findIndex((d) => d.id === docId);
+    if (idx >= 0) {
+      docs[idx] = { ...docs[idx], share_slug: slug, updated_at: new Date().toISOString() };
+      setLocalDocuments(docs);
+    }
+    return slug;
+  }
+
+  const { error } = await supabase!
+    .from("documents")
+    .update({ share_slug: slug })
+    .eq("id", docId);
+
+  if (error) throw error;
+  return slug;
 }
