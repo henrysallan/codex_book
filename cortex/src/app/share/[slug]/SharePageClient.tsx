@@ -1,10 +1,16 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
-import { blocksToMarkdown } from "@/lib/blocksToMarkdown";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import type { Components } from "react-markdown";
+import { useState, useMemo } from "react";
+import { useCreateBlockNote } from "@blocknote/react";
+import { BlockNoteView } from "@blocknote/mantine";
+import { shareSchema, ShareCtx } from "@/lib/shareSchema";
+import * as locales from "@blocknote/core/locales";
+import {
+  multiColumnDropCursor,
+  locales as multiColumnLocales,
+} from "@blocknote/xl-multi-column";
+import "@blocknote/core/fonts/inter.css";
+import "@blocknote/mantine/style.css";
 import type { ShareData } from "./page";
 
 interface Props {
@@ -13,14 +19,31 @@ interface Props {
 
 /**
  * Client component for the public share page.
- * Renders the note as beautiful Markdown with a standalone layout.
- * Handles pageLink clicks: shared pages navigate, unshared show a modal.
+ * Renders the note using BlockNoteView in read-only mode so the output
+ * is pixel-perfect with the editor — just non-editable and non-interactive.
  */
 export function SharePageClient({ data }: Props) {
   const [showPrivateModal, setShowPrivateModal] = useState(false);
 
-  // Convert blocks to markdown, preserving pageLink references
-  const markdown = useMemo(() => blocksToMarkdown(data.content), [data.content]);
+  // Parse blocks from the document content
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const initialContent = useMemo<any[] | undefined>(() => {
+    try {
+      const parsed = JSON.parse(data.content);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {}
+    return undefined;
+  }, [data.content]);
+
+  const editor = useCreateBlockNote({
+    schema: shareSchema,
+    initialContent,
+    dropCursor: multiColumnDropCursor,
+    dictionary: {
+      ...locales.en,
+      multi_column: multiColumnLocales.en,
+    },
+  });
 
   const formattedDate = useMemo(() => {
     try {
@@ -34,121 +57,19 @@ export function SharePageClient({ data }: Props) {
     }
   }, [data.updatedAt]);
 
-  // Build custom components that handle cortex-page: links
-  const handlePageLinkClick = useCallback(
-    (docId: string) => {
-      const slug = data.pageLinkMap[docId];
-      if (slug) {
-        window.open(`/share/${slug}`, "_blank");
-      } else {
-        setShowPrivateModal(true);
-      }
-    },
+  const shareCtxValue = useMemo(
+    () => ({
+      pageLinkMap: data.pageLinkMap,
+      onPrivateLink: () => setShowPrivateModal(true),
+    }),
     [data.pageLinkMap]
   );
 
-  const components: Components = useMemo(
-    () => ({
-      p: ({ children }) => (
-        <p className="mb-4 last:mb-0 leading-[1.75]">{children}</p>
-      ),
-      h1: ({ children }) => (
-        <h1 className="text-2xl font-bold mb-4 mt-8 first:mt-0 text-gray-900">
-          {children}
-        </h1>
-      ),
-      h2: ({ children }) => (
-        <h2 className="text-xl font-semibold mb-3 mt-6 first:mt-0 text-gray-900">
-          {children}
-        </h2>
-      ),
-      h3: ({ children }) => (
-        <h3 className="text-lg font-semibold mb-2 mt-5 first:mt-0 text-gray-900">
-          {children}
-        </h3>
-      ),
-      ul: ({ children }) => (
-        <ul className="list-disc pl-6 mb-4 space-y-1">{children}</ul>
-      ),
-      ol: ({ children }) => (
-        <ol className="list-decimal pl-6 mb-4 space-y-1">{children}</ol>
-      ),
-      li: ({ children }) => (
-        <li className="leading-[1.75]">{children}</li>
-      ),
-      code: ({ children, className }) => {
-        if (className) {
-          return <code className="text-sm font-mono">{children}</code>;
-        }
-        return (
-          <code className="px-1.5 py-0.5 rounded bg-gray-100 text-[0.9em] font-mono text-gray-800">
-            {children}
-          </code>
-        );
-      },
-      pre: ({ children }) => (
-        <pre className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 mb-4 overflow-x-auto text-sm font-mono leading-relaxed">
-          {children}
-        </pre>
-      ),
-      strong: ({ children }) => (
-        <strong className="font-semibold text-gray-900">{children}</strong>
-      ),
-      em: ({ children }) => <em className="italic">{children}</em>,
-      a: ({ children, href }) => {
-        // Handle pageLink references: cortex-page:<docId>
-        if (href?.startsWith("cortex-page:")) {
-          const docId = href.replace("cortex-page:", "");
-          return (
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                handlePageLinkClick(docId);
-              }}
-              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors cursor-pointer font-medium text-[0.95em]"
-            >
-              {children}
-            </button>
-          );
-        }
-
-        // Regular external link
-        return (
-          <a
-            href={href}
-            className="text-blue-600 hover:text-blue-700 underline underline-offset-2 decoration-blue-300 hover:decoration-blue-500 transition-colors"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {children}
-          </a>
-        );
-      },
-      blockquote: ({ children }) => (
-        <blockquote className="border-l-[3px] border-gray-300 pl-4 my-4 text-gray-600 italic">
-          {children}
-        </blockquote>
-      ),
-      hr: () => <hr className="my-8 border-gray-200" />,
-      table: ({ children }) => (
-        <div className="overflow-x-auto mb-4">
-          <table className="text-sm border-collapse w-full">{children}</table>
-        </div>
-      ),
-      thead: ({ children }) => (
-        <thead className="border-b-2 border-gray-200">{children}</thead>
-      ),
-      th: ({ children }) => (
-        <th className="text-left px-3 py-2 font-medium text-gray-900">
-          {children}
-        </th>
-      ),
-      td: ({ children }) => (
-        <td className="px-3 py-2 border-t border-gray-100">{children}</td>
-      ),
-    }),
-    [handlePageLinkClick]
-  );
+  // Apply note font size from settings
+  const fontSize = (data.settings as Record<string, unknown>)?.fontSize;
+  const fontSizeStyle = fontSize
+    ? ({ "--note-font-size": `${fontSize}px` } as React.CSSProperties)
+    : undefined;
 
   return (
     <div className="min-h-screen bg-white">
@@ -197,12 +118,22 @@ export function SharePageClient({ data }: Props) {
         {/* Divider */}
         <hr className="border-gray-100 mb-8" />
 
-        {/* Body */}
-        <article className="text-base text-gray-800 leading-[1.75] [&>*:first-child]:mt-0">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-            {markdown}
-          </ReactMarkdown>
-        </article>
+        {/* BlockNote read-only view */}
+        <div className="share-readonly" style={fontSizeStyle}>
+          <ShareCtx.Provider value={shareCtxValue}>
+            <BlockNoteView
+              editor={editor}
+              editable={false}
+              theme="light"
+              sideMenu={false}
+              formattingToolbar={false}
+              slashMenu={false}
+              emojiPicker={false}
+              filePanel={false}
+              tableHandles={false}
+            />
+          </ShareCtx.Provider>
+        </div>
       </main>
 
       {/* Footer */}

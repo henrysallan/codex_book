@@ -14,7 +14,10 @@ interface Props {
 /** Fetch the shared doc + pageLink map directly from Supabase */
 async function getShareData(slug: string): Promise<ShareData | null> {
   const supabase = getServerSupabase();
-  if (!supabase) return null;
+  if (!supabase) {
+    console.error("[share] getServerSupabase() returned null — DB not configured");
+    return null;
+  }
 
   const { data: doc, error } = await supabase
     .from("documents")
@@ -22,7 +25,10 @@ async function getShareData(slug: string): Promise<ShareData | null> {
     .eq("share_slug", slug)
     .single();
 
-  if (error || !doc) return null;
+  if (error || !doc) {
+    console.error("[share] Query failed for slug:", slug, "error:", error?.message, error?.code);
+    return null;
+  }
 
   // Find all pageLink references and check which are also shared
   let pageLinkMap: Record<string, string | null> = {};

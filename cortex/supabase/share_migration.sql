@@ -7,3 +7,8 @@ ALTER TABLE documents
 -- Index for fast lookups by slug
 CREATE INDEX IF NOT EXISTS idx_documents_share_slug ON documents(share_slug)
   WHERE share_slug IS NOT NULL;
+
+-- Allow public (unauthenticated / anon key) reads for shared documents
+CREATE POLICY "Public read for shared documents"
+  ON documents FOR SELECT
+  USING (share_slug IS NOT NULL);

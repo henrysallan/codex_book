@@ -189,6 +189,50 @@ body {
   cursor: pointer !important;
 }
 
+/* ─── Share page: fully read-only, no interactive affordances ─── */
+.share-readonly .ProseMirror-selectednode,
+.share-readonly .ProseMirror-selectednode > *,
+.share-readonly .bn-block-content.ProseMirror-selectednode > *,
+.share-readonly .ProseMirror-selectednode > .bn-block-content > * {
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: unset !important;
+}
+.share-readonly .bn-editor {
+  cursor: default !important;
+  padding: 0 !important;
+}
+.share-readonly .bn-editor * {
+  cursor: default !important;
+  caret-color: transparent !important;
+}
+/* Keep pageLink spans clickable */
+.share-readonly .bn-editor [data-inline-content-type="pageLink"],
+.share-readonly .bn-editor [data-inline-content-type="pageLink"] * {
+  cursor: pointer !important;
+}
+/* Hide side menu / drag handles entirely */
+.share-readonly .bn-side-menu,
+.share-readonly [data-side-menu],
+.share-readonly .bn-drag-handle-menu {
+  display: none !important;
+}
+/* Suppress all hover backgrounds on table headers */
+.share-readonly .db-th:hover {
+  background-color: transparent !important;
+}
+.share-readonly .db-drag-handle {
+  display: none !important;
+}
+/* Remove column resize handles */
+.share-readonly .db-resizer {
+  display: none !important;
+}
+/* Kill text selection highlighting */
+.share-readonly .bn-editor ::selection {
+  background: transparent !important;
+}
+
 /* ─── PDF viewer (react-pdf) ─── */
 /* Inline the essential TextLayer styles so they're loaded eagerly
    (Turbopack may not inject CSS from dynamically-imported components). */
