@@ -42,6 +42,7 @@ import {
   fetchTodayQuickNotes,
   syncQuickNoteDatabases,
   syncDailyParentDatabase,
+  createMoodboardState as dbCreateMoodboardState,
 } from "./db";
 import { v4 as uuidv4 } from "uuid";
 
@@ -178,7 +179,7 @@ interface AppState {
   createFolder: (name: string, parentId?: string | null) => Promise<void>;
   renameFolder: (id: string, name: string) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
-  createDocument: (folderId?: string | null) => Promise<string>;
+  createDocument: (folderId?: string | null, docType?: import("./types").DocType) => Promise<string>;
   saveDocument: (
     id: string,
     updates: Partial<{
@@ -521,13 +522,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().initialize();
   },
 
-  createDocument: async (folderId: string | null = null) => {
+  createDocument: async (folderId: string | null = null, docType: import("./types").DocType = "note") => {
     // Optimistic: inject doc into local state immediately
     const now = new Date().toISOString();
     const tempId = uuidv4();
     const tempDoc: DbDocument = {
       id: tempId,
-      title: "Untitled",
+      title: docType === "moodboard" ? "Untitled Moodboard" : "Untitled",
       subtitle: null,
       folder_id: folderId,
       parent_document_id: null,
@@ -535,7 +536,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       content: "[]",
       tags: [],
       settings: {},
-      doc_type: "note",
+      doc_type: docType,
       position: 0,
       share_slug: null,
       created_at: now,
@@ -549,7 +550,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       rootDocuments: getRootDocuments(newDocs, _dbFolders),
     });
     // Persist and open — must await so we return the real id
-    const dbDoc = await dbCreateDocument(folderId);
+    const title = docType === "moodboard" ? "Untitled Moodboard" : "Untitled";
+    const dbDoc = await dbCreateDocument(folderId, title, "[]", null, docType);
+    // If it's a moodboard, create the companion moodboard_state row
+    if (docType === "moodboard") {
+      try {
+        await dbCreateMoodboardState(dbDoc.id);
+      } catch (err) {
+        console.error("Failed to create moodboard state:", err);
+      }
+    }
     // Reconcile: swap temp doc for the real one
     const reconciledDocs = get()._dbDocuments.map((d) => (d.id === tempId ? dbDoc : d));
     set({

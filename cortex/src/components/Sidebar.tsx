@@ -32,6 +32,7 @@ import {
   CheckSquare,
   CalendarDays,
   Zap,
+  LayoutGrid,
 } from "lucide-react";
 import { DriveFolder } from "@/components/DriveFolder";
 
@@ -364,6 +365,13 @@ export function Sidebar({ onOpenImport, onOpenSettings }: { onOpenImport?: () =>
               title="New document"
             >
               <Plus size={14} />
+            </button>
+            <button
+              onClick={() => createDocument(null, "moodboard")}
+              className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+              title="New moodboard"
+            >
+              <LayoutGrid size={14} />
             </button>
             <button
               onClick={() => setIsCreatingFolder(true)}
@@ -1049,6 +1057,8 @@ function DraggableDocItem({
           <CalendarDays size={13} className="text-muted-foreground shrink-0" />
         ) : doc.docType === "quick_note_parent" ? (
           <Zap size={13} className="text-muted-foreground shrink-0" />
+        ) : doc.docType === "moodboard" ? (
+          <LayoutGrid size={13} className="text-muted-foreground shrink-0" />
         ) : (
           <FileText size={13} className="text-muted-foreground shrink-0" />
         )}

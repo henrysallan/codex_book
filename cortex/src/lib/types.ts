@@ -18,7 +18,7 @@ export interface NoteSettings {
 }
 
 // Document type discriminator
-export type DocType = "note" | "todo" | "daily_parent" | "daily" | "quick_note_parent";
+export type DocType = "note" | "todo" | "daily_parent" | "daily" | "quick_note_parent" | "moodboard";
 
 export interface DbDocument {
   id: string;

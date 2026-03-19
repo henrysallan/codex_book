@@ -1994,3 +1994,80 @@ export async function toggleShareLink(
   if (error) throw error;
   return slug;
 }
+
+// ============================================================
+// Moodboard State Operations
+// ============================================================
+
+/** Fetch the tldraw snapshot for a moodboard document. Returns null if none saved yet. */
+export async function fetchMoodboardState(
+  documentId: string
+): Promise<{ tldraw_snapshot: unknown; canvas_settings: unknown } | null> {
+  if (!isSupabaseConfigured()) {
+    // Local storage fallback
+    try {
+      const raw = localStorage.getItem(`cortex_moodboard_state:${documentId}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  const { data, error } = await supabase!
+    .from("moodboard_state")
+    .select("tldraw_snapshot, canvas_settings")
+    .eq("document_id", documentId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+/** Save (upsert) the tldraw snapshot for a moodboard document. */
+export async function saveMoodboardState(
+  documentId: string,
+  tldrawSnapshot: unknown,
+  canvasSettings?: unknown
+): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    // Local storage fallback
+    localStorage.setItem(
+      `cortex_moodboard_state:${documentId}`,
+      JSON.stringify({
+        tldraw_snapshot: tldrawSnapshot,
+        canvas_settings: canvasSettings ?? {},
+      })
+    );
+    return;
+  }
+
+  const { error } = await supabase!
+    .from("moodboard_state")
+    .upsert(
+      {
+        document_id: documentId,
+        tldraw_snapshot: tldrawSnapshot,
+        canvas_settings: canvasSettings ?? {},
+      },
+      { onConflict: "document_id" }
+    );
+
+  if (error) throw error;
+}
+
+/** Create an empty moodboard_state row for a new moodboard. */
+export async function createMoodboardState(documentId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    localStorage.setItem(
+      `cortex_moodboard_state:${documentId}`,
+      JSON.stringify({ tldraw_snapshot: null, canvas_settings: {} })
+    );
+    return;
+  }
+
+  const { error } = await supabase!
+    .from("moodboard_state")
+    .insert({ document_id: documentId });
+
+  if (error) throw error;
+}

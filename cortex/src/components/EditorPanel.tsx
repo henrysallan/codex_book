@@ -18,6 +18,15 @@ const FileViewer = dynamic(() => import("@/components/FileViewer").then((m) => m
   ),
 });
 
+const MoodboardCanvas = dynamic(() => import("@/components/MoodboardCanvas").then((m) => m.MoodboardCanvas), {
+  ssr: false,
+  loading: () => (
+    <div className="h-full flex items-center justify-center text-muted-foreground gap-2">
+      <Loader2 size={16} className="animate-spin" /> Loading canvas…
+    </div>
+  ),
+});
+
 interface EditorPanelProps {
   onOpenSearch?: () => void;
 }
@@ -52,6 +61,8 @@ export function EditorPanel({ onOpenSearch }: EditorPanelProps) {
             mimeType={activeDriveTab.driveFile.mimeType}
             webViewLink={activeDriveTab.driveFile.webViewLink}
           />
+        ) : activeDocument?.docType === "moodboard" ? (
+          <MoodboardCanvas key={activeDocument.id} document={activeDocument} />
         ) : activeDocument ? (
           <>
             <DocumentEditor key={activeDocument.id} document={activeDocument} />
@@ -65,7 +76,7 @@ export function EditorPanel({ onOpenSearch }: EditorPanelProps) {
       </div>
 
       {/* Search bar at bottom */}
-      {!showDashboard && <SearchBar onOpenSearch={onOpenSearch} />}
+      {!showDashboard && activeDocument?.docType !== "moodboard" && <SearchBar onOpenSearch={onOpenSearch} />}
     </div>
   );
 }
