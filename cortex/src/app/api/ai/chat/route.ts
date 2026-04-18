@@ -63,12 +63,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const lastUserMessage =
-      messages.filter((m) => m.role === "user").pop()?.content ?? "";
+    const userMessages = messages.filter((m) => m.role === "user").map((m) => m.content);
+    const lastUserMessage = userMessages[userMessages.length - 1] ?? "";
+    const priorUserQueries = userMessages.slice(0, -1);
 
     // ─── Step 1: Route the query ───
 
     let tier: Tier;
+    // `effectiveQuery` is what the router actually classified on — may differ
+    // from `lastUserMessage` if an affirmation was resolved. Downstream retrieval
+    // uses it so "yes" doesn't get embedded/keyword-searched verbatim.
+    let effectiveQuery = lastUserMessage;
     if (tierOverride) {
       tier = tierOverride;
     } else {
@@ -77,10 +82,15 @@ export async function POST(req: NextRequest) {
         hasActiveDocument: !!activeDocumentId,
         contextItemCount: contextItems?.length ?? 0,
         conversationLength: messages.length,
+        priorUserQueries,
       });
       tier = routeResult.tier;
+      effectiveQuery = routeResult.effectiveQuery;
       console.log(
-        `[/api/ai/chat] Routed to ${tier} (source: ${routeResult.source})`
+        `[/api/ai/chat] Routed to ${tier} (source: ${routeResult.source})` +
+          (routeResult.source === "affirmation"
+            ? ` — affirmation resolved "${lastUserMessage}" → "${effectiveQuery.slice(0, 80)}"`
+            : "")
       );
     }
 
@@ -102,7 +112,7 @@ export async function POST(req: NextRequest) {
           ? { title: "Current Document", content: activeDocumentContent }
           : await fetchDocumentContent(activeDocumentId);
         if (doc) {
-          const ctx = assembleTier0Context(doc, lastUserMessage);
+          const ctx = assembleTier0Context(doc, effectiveQuery);
           systemPrompt = ctx.systemPrompt;
           contextTokens = ctx.contextTokens;
           documentIds = [activeDocumentId];
@@ -115,8 +125,8 @@ export async function POST(req: NextRequest) {
     if (tier === "TIER1") {
       // Hybrid search: keyword + vector in parallel
       const [embedding, kwResults] = await Promise.all([
-        embedQuery(lastUserMessage),
-        keywordSearch(lastUserMessage),
+        embedQuery(effectiveQuery),
+        keywordSearch(effectiveQuery),
       ]);
       const vectorChunks = await retrieveChunks(embedding, {
         threshold: 0.4,
@@ -153,8 +163,8 @@ export async function POST(req: NextRequest) {
     if (tier === "TIER2") {
       // Hybrid search: keyword + vector in parallel
       const [embedding, kwResults] = await Promise.all([
-        embedQuery(lastUserMessage),
-        keywordSearch(lastUserMessage),
+        embedQuery(effectiveQuery),
+        keywordSearch(effectiveQuery),
       ]);
       const vectorChunks = await retrieveChunks(embedding, {
         threshold: 0.35,

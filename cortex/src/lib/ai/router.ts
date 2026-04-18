@@ -1,9 +1,10 @@
 /**
  * Query Router — determines which retrieval tier to use.
  *
- * Two-layer system:
- * 1. Heuristic overrides (instant, no API call)
- * 2. Groq Llama 3.1 8B classifier (~30ms, 1-token output)
+ * Three-layer system:
+ * 1. Affirmation resolution (carry prior-turn intent into short "yes"/"ok" replies)
+ * 2. Heuristic overrides (instant, no API call)
+ * 3. Groq Llama 3.1 8B classifier (~30ms, 1-token output)
  */
 
 import Groq from "groq-sdk";
@@ -18,45 +19,120 @@ interface RouteInput {
   query: string;
   hasActiveDocument: boolean;
   contextItemCount: number;
-  /** The first message in the conversation — if multi-turn, routing uses the original query */
+  /** Length of the full conversation (including assistant turns). */
   conversationLength: number;
+  /**
+   * Prior user messages in chronological order (most recent last, NOT including `query`).
+   * Used to resolve short affirmations like "yes" back to the substantive prior query.
+   */
+  priorUserQueries?: string[];
 }
 
 /**
  * Route a user query to the appropriate retrieval tier.
- * Returns the tier and whether the classifier was used.
+ * Returns the tier, the effective query used for routing, and whether the classifier was used.
  */
 export async function routeQuery(
   input: RouteInput
-): Promise<{ tier: Tier; source: "heuristic" | "classifier" }> {
-  // ─── Layer 1: Heuristic overrides ───
+): Promise<{ tier: Tier; source: "heuristic" | "classifier" | "affirmation"; effectiveQuery: string }> {
+  // ─── Layer 1: Affirmation resolution ───
+  // If the user just said "yes" / "ok" / "do it", route as if they sent the
+  // substantive prior user message. This matches the common follow-up flow:
+  //   user: "explain ethics according to my notes"
+  //   assistant: "should I search your knowledge base?"
+  //   user: "yes"  ← this should route like the first message, not "yes"
+  let effectiveQuery = input.query;
+  let source: "heuristic" | "classifier" | "affirmation" = "heuristic";
 
-  const heuristic = applyHeuristics(input);
-  if (heuristic) {
-    return { tier: heuristic, source: "heuristic" };
+  if (isShortAffirmation(input.query) && input.priorUserQueries?.length) {
+    const prior = findLastSubstantiveQuery(input.priorUserQueries);
+    if (prior) {
+      effectiveQuery = prior;
+      source = "affirmation";
+    }
   }
 
-  // ─── Layer 2: Groq classifier ───
+  const effectiveInput: RouteInput = { ...input, query: effectiveQuery };
 
-  const tier = await classifyWithGroq(input.query, input.hasActiveDocument);
-  return { tier, source: "classifier" };
+  // ─── Layer 2: Heuristic overrides ───
+
+  const heuristic = applyHeuristics(effectiveInput);
+  if (heuristic) {
+    // If we resolved an affirmation, keep "affirmation" as the source; otherwise "heuristic".
+    const src = source === "affirmation" ? "affirmation" : "heuristic";
+    return { tier: heuristic, source: src, effectiveQuery };
+  }
+
+  // ─── Layer 3: Groq classifier ───
+
+  const tier = await classifyWithGroq(effectiveQuery, input.hasActiveDocument);
+  return { tier, source: source === "affirmation" ? "affirmation" : "classifier", effectiveQuery };
+}
+
+// ─── Affirmation detection ───
+
+const SHORT_AFFIRMATION_RE =
+  /^\s*(yes|yeah|yep|yup|sure|ok|okay|k|kk|do\s+it|go\s+ahead|please\s+do|please|do\s+that|sounds?\s+good|search|go|continue)\s*[.!?]*\s*$/i;
+
+function isShortAffirmation(query: string): boolean {
+  if (!query) return false;
+  // Also treat very short queries (<= 3 words) that begin with an affirmation as affirmations.
+  return SHORT_AFFIRMATION_RE.test(query);
+}
+
+/**
+ * Walk backwards through prior user queries and return the first one that
+ * looks substantive (not itself an affirmation, at least 4 words).
+ */
+function findLastSubstantiveQuery(priorQueries: string[]): string | null {
+  for (let i = priorQueries.length - 1; i >= 0; i--) {
+    const q = priorQueries[i];
+    if (!q) continue;
+    if (isShortAffirmation(q)) continue;
+    const wordCount = q.trim().split(/\s+/).length;
+    if (wordCount >= 3) return q;
+  }
+  return null;
 }
 
 // ─── Heuristics ───
 
+/** Forces TIER2 — deep cross-document analysis. */
 const TIER2_PATTERNS = [
-  /across\s+(all\s+)?my\s+notes/i,
+  /across\s+(all\s+)?my\s+notes?/i,
+  /through(out)?\s+(all\s+)?my\s+notes?/i,
   /everything\s+about/i,
   /all\s+my\s+(notes|documents|pages)/i,
   /compare\s+(all|every|multiple)/i,
   /search\s+(all|every)/i,
+  /synthesi[sz]e\s+(my|all)/i,
+  /compile\s+(all|everything)/i,
 ];
 
+/**
+ * Forces TIER1 — search summaries across notes.
+ * These patterns imply the user wants to pull from their knowledge base,
+ * even when a document happens to be open in the editor.
+ */
+const TIER1_PATTERNS = [
+  /according\s+to\s+my\s+notes?/i,
+  /based\s+on\s+my\s+notes?/i,
+  /in\s+my\s+notes?/i,
+  /from\s+my\s+notes?/i,
+  /my\s+notes?\s+(on|about|regarding)/i,
+  /what\s+(have|did)\s+I\s+(written|said|noted|wrote|thought)/i,
+  /what\s+do\s+I\s+(have|know|think)\s+(on|about|regarding)/i,
+  /find\s+(notes?|documents?|pages?)\s+(on|about)/i,
+  /show\s+me\s+(notes?|documents?|pages?)/i,
+];
+
+/** Forces TIER0 — current document only. Requires an active document. */
 const TIER0_PATTERNS = [
-  /^(summarize|rewrite|explain|simplify|expand|shorten)\s+(this|the)/i,
-  /^what\s+(does\s+)?this\s+(say|mean|document)/i,
-  /^(fix|improve|edit)\s+this/i,
-  /in\s+this\s+(document|note|page)/i,
+  /^(summarize|rewrite|explain|simplify|expand|shorten|paraphrase)\s+(this|the\s+(document|note|page|section|paragraph))/i,
+  /^what\s+(does\s+)?this\s+(say|mean|document|note)/i,
+  /^(fix|improve|edit|proofread)\s+this/i,
+  /\bin\s+this\s+(document|note|page)\b/i,
+  /^tldr\s*(of\s+this)?/i,
 ];
 
 function applyHeuristics(input: RouteInput): Tier | null {
@@ -65,6 +141,15 @@ function applyHeuristics(input: RouteInput): Tier | null {
   // Context items present → CONTEXT mode
   if (contextItemCount > 0) {
     return "CONTEXT";
+  }
+
+  // TIER1-forcing patterns ("according to my notes", etc.) take precedence
+  // over TIER0 even when a doc is open — the user is explicitly pointing at
+  // the knowledge base, not the current editor buffer.
+  for (const pattern of TIER1_PATTERNS) {
+    if (pattern.test(query)) {
+      return "TIER1";
+    }
   }
 
   // Tier 2 keyword patterns → force deep search
@@ -102,19 +187,25 @@ async function classifyWithGroq(
     const systemPrompt = `You are a query classifier for a note-taking app with AI search.
 
 Classify the user's query into exactly one category:
-- TIER0: Answerable from the current document alone (the user is asking about what they're currently editing)
-- TIER1: Needs to search across documents but summaries are sufficient (most cross-document questions)
-- TIER2: Needs full document content for deep analysis, comparison, or synthesis across multiple documents
+- TIER0: Answerable from the CURRENT document alone. The user is asking about what they are editing right now ("summarize this", "fix the intro", "what does this paragraph mean").
+- TIER1: Cross-document search where chunk summaries are enough ("what have I written about X", "find my notes on Y").
+- TIER2: Deep cross-document analysis requiring full content ("synthesize my views on X across everything I've written", "compare my notes on A and B").
 
-${hasActiveDocument ? "The user currently has a document open in the editor." : "The user does NOT have any document open."}
+Guidance:
+- Questions that reference "my notes", "my notebook", "my knowledge base" are almost always TIER1 or TIER2, NEVER TIER0 — even if a document is open.
+- Questions like "explain X", "tell me about X", "what is X" (without "in this document") usually want TIER1, because the user is asking about a topic, not the current buffer.
+- Only pick TIER0 when the query explicitly points at the current document ("this", "the paragraph above", "the intro I just wrote") or is clearly a rewrite/polish task on the current text.
+- Prefer TIER1 over TIER2 when in doubt — TIER2 is expensive.
 
-Respond with exactly one word: TIER0, TIER1, or TIER2`;
+Context flag: ${hasActiveDocument ? "a document IS open in the editor." : "NO document is open in the editor."}
+
+Respond with exactly one token: TIER0, TIER1, or TIER2.`;
 
     const response = await groq.chat.completions.create({
       model: MODEL,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: query },
+        { role: "user", content: `Query: ${query}` },
       ],
       max_tokens: 4,
       temperature: 0,
@@ -134,10 +225,10 @@ Respond with exactly one word: TIER0, TIER1, or TIER2`;
       });
     }
 
-    // Parse response
+    // Parse response — TIER0 only honored when a doc is actually open.
     if (text.includes("TIER0") && hasActiveDocument) return "TIER0";
     if (text.includes("TIER2")) return "TIER2";
-    // Default to TIER1 for any ambiguous/unrecognized response
+    // Default to TIER1 for TIER1, ambiguous, or any unrecognised response.
     return "TIER1";
   } catch (err) {
     console.error("[router] Groq classifier error, falling back to TIER1:", err);
