@@ -194,6 +194,7 @@ export function MoodboardCanvas({ document: doc }: MoodboardCanvasProps) {
       </div>
 
       <Tldraw
+        licenseKey={process.env.NEXT_PUBLIC_TLDRAW_LICENSE_KEY}
         onMount={handleMount}
         autoFocus
       />

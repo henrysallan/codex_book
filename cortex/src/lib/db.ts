@@ -210,16 +210,25 @@ export async function deleteFolder(id: string): Promise<void> {
 // Document Operations
 // ============================================================
 
+// Metadata-only columns for sidebar tree building (excludes heavy `content` and `settings`).
+// Full content is fetched on-demand via fetchDocument() when a doc is opened.
+const DOCUMENT_META_COLUMNS =
+  "id, title, subtitle, folder_id, parent_document_id, user_id, tags, doc_type, position, share_slug, created_at, updated_at";
+
 export async function fetchDocuments(): Promise<DbDocument[]> {
   if (!isSupabaseConfigured()) return getLocalDocuments();
 
   const { data, error } = await supabase!
     .from("documents")
-    .select("*")
+    .select(DOCUMENT_META_COLUMNS)
     .order("position", { ascending: true });
 
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []).map((d) => ({
+    ...(d as Omit<DbDocument, "content" | "settings">),
+    content: "[]",
+    settings: {},
+  })) as DbDocument[];
 }
 
 export async function fetchDocument(id: string): Promise<DbDocument | null> {
@@ -635,30 +644,23 @@ export async function searchDocuments(query: string): Promise<SearchResult[]> {
       .sort((a, b) => b.rank - a.rank);
   }
 
-  // Supabase full-text search using the RPC function
+  // Supabase full-text search using the RPC function.
+  // The RPC returns a server-side `ts_headline` snippet (no full content),
+  // so we only egress title/subtitle/tags/snippet per result.
   const { data, error } = await supabase!.rpc("search_documents", {
     search_query: query,
   });
 
   if (error) throw error;
 
-  return (data ?? []).map((row: Record<string, unknown>) => {
-    const text = extractTextFromContent((row.content as string) || "[]");
-    const q = query.toLowerCase();
-    const idx = text.toLowerCase().indexOf(q);
-    const snippetStart = Math.max(0, idx - 60);
-    const snippetEnd = Math.min(text.length, idx + query.length + 60);
-    const snippet = idx >= 0 ? text.slice(snippetStart, snippetEnd) : text.slice(0, 120);
-
-    return {
-      id: row.id as string,
-      title: row.title as string,
-      subtitle: row.subtitle as string | null,
-      tags: (row.tags as string[]) || [],
-      snippet,
-      rank: row.rank as number,
-    };
-  });
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    title: row.title as string,
+    subtitle: row.subtitle as string | null,
+    tags: (row.tags as string[]) || [],
+    snippet: (row.snippet as string | null) ?? "",
+    rank: row.rank as number,
+  }));
 }
 
 // ============================================================
@@ -685,16 +687,19 @@ export async function fetchAnnotations(documentId: string): Promise<DbAnnotation
     return getLocalAnnotations().filter((a) => a.document_id === documentId);
   }
 
+  // Exclude `messages` from the list fetch — the document editor only needs
+  // highlight metadata for rendering markers. Full chat history is loaded
+  // on-demand when the user opens a specific annotation via fetchAnnotation(id).
   const { data, error } = await supabase!
     .from("annotations")
-    .select("*")
+    .select("id, document_id, user_id, block_id, highlighted_text, created_at, updated_at")
     .eq("document_id", documentId)
     .order("created_at", { ascending: true });
 
   if (error) throw error;
-  return (data ?? []).map((row: Record<string, unknown>) => ({
-    ...row,
-    messages: (typeof row.messages === "string" ? JSON.parse(row.messages) : row.messages) as AnnotationMessage[],
+  return (data ?? []).map((row) => ({
+    ...(row as Omit<DbAnnotation, "messages">),
+    messages: [] as AnnotationMessage[],
   })) as DbAnnotation[];
 }
 

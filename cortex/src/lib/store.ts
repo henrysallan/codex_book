@@ -33,6 +33,7 @@ import {
   dbDocumentToDocument,
   createAnnotation as dbCreateAnnotation,
   fetchAnnotations as dbFetchAnnotations,
+  fetchAnnotation as dbFetchAnnotation,
   updateAnnotationMessages as dbUpdateAnnotationMessages,
   deleteAnnotation as dbDeleteAnnotation,
   ensureTodoDocument,
@@ -207,7 +208,7 @@ interface AppState {
   closeAnnotationChat: () => void;
   addAnnotationMessage: (content: string, role: "user" | "assistant") => Promise<void>;
   loadAnnotations: (documentId: string) => Promise<void>;
-  openExistingAnnotation: (annotation: Annotation) => void;
+  openExistingAnnotation: (annotation: Annotation) => Promise<void>;
   deleteAnnotationById: (id: string) => Promise<void>;
   openDriveFile: (file: { id: string; name: string; mimeType: string; webViewLink: string | null }) => void;
 
@@ -727,6 +728,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       : null;
 
     if (existing) {
+      // Annotations from the list fetch carry empty messages to save egress.
+      // Hydrate on open so the chat shows prior history.
+      if (existing.messages.length === 0) {
+        try {
+          const full = await dbFetchAnnotation(existing.id);
+          if (full) {
+            const hydrated: Annotation = { ...existing, messages: full.messages };
+            set({
+              activeAnnotation: hydrated,
+              documentAnnotations: get().documentAnnotations.map((a) =>
+                a.id === hydrated.id ? hydrated : a
+              ),
+            });
+            return;
+          }
+        } catch (err) {
+          console.error("Failed to hydrate annotation messages:", err);
+        }
+      }
       set({ activeAnnotation: existing });
       return;
     }
@@ -807,8 +827,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  openExistingAnnotation: (annotation) => {
+  openExistingAnnotation: async (annotation) => {
+    // Annotations from the list fetch carry empty messages to save egress.
+    // Hydrate on open so the chat shows prior history.
     set({ isChatOpen: false, activeAnnotation: annotation });
+    if (annotation.messages.length > 0) return;
+    try {
+      const full = await dbFetchAnnotation(annotation.id);
+      if (!full) return;
+      const hydrated: Annotation = { ...annotation, messages: full.messages };
+      // Only update if still viewing this annotation
+      if (get().activeAnnotation?.id === hydrated.id) {
+        set({ activeAnnotation: hydrated });
+      }
+      set({
+        documentAnnotations: get().documentAnnotations.map((a) =>
+          a.id === hydrated.id ? hydrated : a
+        ),
+      });
+    } catch (err) {
+      console.error("Failed to hydrate annotation messages:", err);
+    }
   },
 
   deleteAnnotationById: async (id) => {
