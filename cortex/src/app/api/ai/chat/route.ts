@@ -70,29 +70,26 @@ export async function POST(req: NextRequest) {
     // ─── Step 1: Route the query ───
 
     let tier: Tier;
-    // `effectiveQuery` is what the router actually classified on — may differ
-    // from `lastUserMessage` if an affirmation was resolved. Downstream retrieval
-    // uses it so "yes" doesn't get embedded/keyword-searched verbatim.
-    let effectiveQuery = lastUserMessage;
-    if (tierOverride) {
-      tier = tierOverride;
-    } else {
-      const routeResult = await routeQuery({
-        query: lastUserMessage,
-        hasActiveDocument: !!activeDocumentId,
-        contextItemCount: contextItems?.length ?? 0,
-        conversationLength: messages.length,
-        priorUserQueries,
-      });
-      tier = routeResult.tier;
-      effectiveQuery = routeResult.effectiveQuery;
-      console.log(
-        `[/api/ai/chat] Routed to ${tier} (source: ${routeResult.source})` +
-          (routeResult.source === "affirmation"
-            ? ` — affirmation resolved "${lastUserMessage}" → "${effectiveQuery.slice(0, 80)}"`
-            : "")
-      );
-    }
+    // Always run routeQuery so affirmation resolution produces a sensible
+    // `effectiveQuery`, even when the client forces a tier via `tierOverride`
+    // (e.g. the "Look deeper" button). Otherwise a short follow-up like "yes"
+    // would get embedded/keyword-searched verbatim.
+    const routeResult = await routeQuery({
+      query: lastUserMessage,
+      hasActiveDocument: !!activeDocumentId,
+      contextItemCount: contextItems?.length ?? 0,
+      conversationLength: messages.length,
+      priorUserQueries,
+    });
+    const effectiveQuery = routeResult.effectiveQuery;
+    tier = tierOverride ?? routeResult.tier;
+    console.log(
+      `[/api/ai/chat] Routed to ${tier}` +
+        (tierOverride ? ` (override; classifier said ${routeResult.tier})` : ` (source: ${routeResult.source})`) +
+        (routeResult.source === "affirmation"
+          ? ` — affirmation resolved "${lastUserMessage}" → "${effectiveQuery.slice(0, 80)}"`
+          : "")
+    );
 
     // ─── Step 2: Retrieve context based on tier ───
 
@@ -173,11 +170,16 @@ export async function POST(req: NextRequest) {
       });
       const vectorDocs = await retrieveDocuments(vectorChunks, { maxDocuments: 4 });
 
-      // Merge keyword-matched docs that vector search missed
+      // Merge keyword-matched docs that vector search missed.
+      // Scale the keyword cap so TIER2 always aims for ~7 full docs: when
+      // vector returns few/zero (e.g. unindexed docs), lean harder on keyword
+      // results rather than shipping a near-empty deep search.
       const vectorDocIds = new Set(vectorDocs.map((d) => d.id));
+      const TIER2_TARGET_DOC_COUNT = 7;
+      const keywordSlots = Math.max(3, TIER2_TARGET_DOC_COUNT - vectorDocs.length);
       const additionalDocIds = kwResults
         .filter((kr) => !vectorDocIds.has(kr.id))
-        .slice(0, 3) // Cap keyword additions so we don't blow up context
+        .slice(0, keywordSlots)
         .map((kr) => kr.id);
 
       let allDocs = [...vectorDocs];

@@ -105,13 +105,17 @@ export function ChatPanel() {
         addChatMessage({ role: "user", content: text });
       }
 
-      // Build message history for the API
-      const allMessages = [
-        ...chatMessages.map((m) => ({ role: m.role, content: m.content })),
-      ];
-      if (!tierOverride) {
-        allMessages.push({ role: "user" as const, content: text });
-      }
+      // Build message history for the API.
+      // For tier escalations ("Look deeper"), resubmit with only the user's
+      // original query — NOT the prior assistant reply. Otherwise the request
+      // ends with an assistant message, and Anthropic's tool-use loop treats
+      // it as a prefill and can hang without producing text.
+      const allMessages = tierOverride
+        ? [{ role: "user" as const, content: text }]
+        : [
+            ...chatMessages.map((m) => ({ role: m.role, content: m.content })),
+            { role: "user" as const, content: text },
+          ];
 
       setIsStreaming(true);
       setStreamingContent("");
@@ -239,15 +243,13 @@ export function ChatPanel() {
   };
 
   const handleLookDeeper = () => {
-    // Re-send the last user message at TIER2
+    // Re-send the last user message at TIER2. The streaming UI already shows
+    // a "Thinking…" spinner, so we don't need a placeholder assistant message
+    // (it would clutter history and never get cleaned up).
     const lastUserMsg = [...chatMessages]
       .reverse()
       .find((m) => m.role === "user");
     if (lastUserMsg) {
-      addChatMessage({
-        role: "assistant",
-        content: "🔍 Searching deeper…",
-      });
       sendMessage(lastUserMsg.content, "TIER2");
     }
   };
