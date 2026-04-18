@@ -50,7 +50,7 @@ interface DatabaseTableProps {
 
 export function DatabaseTable({ block, editor }: DatabaseTableProps) {
   const openDocument = useAppStore((s) => s.openDocument);
-  const initialize = useAppStore((s) => s.initialize);
+  const _rebuildTree = useAppStore((s) => s._rebuildTree);
 
   const columns = useMemo(
     () => parseColumns(block.props.columns),
@@ -108,12 +108,17 @@ export function DatabaseTable({ block, editor }: DatabaseTableProps) {
         const row = rows.find((r) => r.id === rowId);
         if (row?.docId) {
           dbUpdateDocument(row.docId, { title: value || "Untitled" }).then(() => {
-            initialize();
+            // Update title in local state and rebuild tree (no DB re-fetch)
+            const docs = useAppStore.getState()._dbDocuments;
+            useAppStore.setState({
+              _dbDocuments: docs.map((d) => d.id === row.docId ? { ...d, title: value || "Untitled" } : d),
+            });
+            _rebuildTree();
           }).catch((err) => console.error("Failed to sync doc title:", err));
         }
       }
     },
-    [rows, columns, updateRows, initialize]
+    [rows, columns, updateRows, _rebuildTree]
   );
 
   // ─── Row management ───
@@ -140,11 +145,15 @@ export function DatabaseTable({ block, editor }: DatabaseTableProps) {
         ),
       };
       updateRows([...rows, newRow]);
-      await initialize();
+      // Add the new doc to local state and rebuild tree (no DB re-fetch)
+      const docs = useAppStore.getState()._dbDocuments;
+      const newDbDoc = { ...dbDoc, content: "[]", settings: {} };
+      useAppStore.setState({ _dbDocuments: [...docs, newDbDoc] });
+      _rebuildTree();
     } catch (err) {
       console.error("Failed to create row document:", err);
     }
-  }, [columns, rows, updateRows, initialize]);
+  }, [columns, rows, updateRows, _rebuildTree]);
 
   const commitNewRow = useCallback(() => {
     const trimmed = newRowTitle.trim();

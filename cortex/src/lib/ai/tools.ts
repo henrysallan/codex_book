@@ -519,6 +519,36 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       },
     },
   },
+  {
+    name: "create_note",
+    description:
+      "Create a new note in the user's knowledge base. Write the body in markdown — it will be converted to the editor's block format automatically. Supports headings (#, ##, ###), paragraphs, bullet lists (- item), numbered lists (1. item), checklists (- [ ] / - [x]), code blocks (```lang), bold (**), italic (*), inline code (`), strikethrough (~~), and links ([text](url)). To place the note in a specific folder, use get_folder_tree first to discover available folders, then provide the folder name or path. Returns the new document's ID and title.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: {
+          type: "string",
+          description: "The title for the new note.",
+        },
+        markdown: {
+          type: "string",
+          description:
+            "The note body in markdown. Will be converted to BlockNote blocks.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional array of tags for the note.",
+        },
+        folderName: {
+          type: "string",
+          description:
+            "Optional folder name or path to place the note in. Supports a single folder name (case-insensitive fuzzy match) or a nested path separated by \" > \" e.g. \"School Notes > Classes > Ethics\". If a path is given, each segment is resolved from parent to child. If not found or omitted, the note is created at the root level.",
+        },
+      },
+      required: ["title", "markdown"],
+    },
+  },
 ];
 
 // ─── Helpers ───
@@ -1906,6 +1936,334 @@ async function getRecentlyModified(input: {
   return JSON.stringify({ count: results.length, results });
 }
 
+// ─── Markdown → BlockNote converter ───
+
+/**
+ * Convert markdown text to BlockNote JSON blocks.
+ * Handles headings, paragraphs, bullet/numbered/check lists, code blocks,
+ * and inline formatting (bold, italic, code, strikethrough, links).
+ */
+function markdownToBlockNote(md: string): Record<string, unknown>[] {
+  const lines = md.split("\n");
+  const blocks: Record<string, unknown>[] = [];
+  let i = 0;
+  let blockIdCounter = 0;
+
+  function nextId(): string {
+    return `ai-${Date.now()}-${blockIdCounter++}`;
+  }
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Code block
+    if (line.trimStart().startsWith("```")) {
+      const lang = line.trimStart().slice(3).trim();
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trimStart().startsWith("```")) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing ```
+      blocks.push({
+        id: nextId(),
+        type: "codeBlock",
+        props: { language: lang || "text" },
+        content: [{ type: "text", text: codeLines.join("\n"), styles: {} }],
+        children: [],
+      });
+      continue;
+    }
+
+    // Blank line → skip (spacing handled by blocks themselves)
+    if (line.trim() === "") {
+      i++;
+      continue;
+    }
+
+    // Heading
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      blocks.push({
+        id: nextId(),
+        type: "heading",
+        props: {
+          level: headingMatch[1].length,
+          textColor: "default",
+          backgroundColor: "default",
+          textAlignment: "left",
+        },
+        content: parseInline(headingMatch[2]),
+        children: [],
+      });
+      i++;
+      continue;
+    }
+
+    // Checklist item: - [ ] or - [x]
+    const checkMatch = line.match(/^[-*]\s+\[([ xX])\]\s+(.*)$/);
+    if (checkMatch) {
+      blocks.push({
+        id: nextId(),
+        type: "checkListItem",
+        props: {
+          textColor: "default",
+          backgroundColor: "default",
+          textAlignment: "left",
+          checked: checkMatch[1].toLowerCase() === "x",
+        },
+        content: parseInline(checkMatch[2]),
+        children: [],
+      });
+      i++;
+      continue;
+    }
+
+    // Bullet list item: - item or * item
+    const bulletMatch = line.match(/^[-*]\s+(.+)$/);
+    if (bulletMatch) {
+      blocks.push({
+        id: nextId(),
+        type: "bulletListItem",
+        props: {
+          textColor: "default",
+          backgroundColor: "default",
+          textAlignment: "left",
+        },
+        content: parseInline(bulletMatch[1]),
+        children: [],
+      });
+      i++;
+      continue;
+    }
+
+    // Numbered list item: 1. item
+    const numberedMatch = line.match(/^\d+\.\s+(.+)$/);
+    if (numberedMatch) {
+      blocks.push({
+        id: nextId(),
+        type: "numberedListItem",
+        props: {
+          textColor: "default",
+          backgroundColor: "default",
+          textAlignment: "left",
+        },
+        content: parseInline(numberedMatch[1]),
+        children: [],
+      });
+      i++;
+      continue;
+    }
+
+    // Paragraph (default)
+    blocks.push({
+      id: nextId(),
+      type: "paragraph",
+      props: {
+        textColor: "default",
+        backgroundColor: "default",
+        textAlignment: "left",
+      },
+      content: parseInline(line),
+      children: [],
+    });
+    i++;
+  }
+
+  return blocks;
+}
+
+/**
+ * Parse a single line of markdown inline formatting into BlockNote inline
+ * content nodes. Handles bold, italic, inline code, strikethrough, and links.
+ */
+function parseInline(text: string): Record<string, unknown>[] {
+  const nodes: Record<string, unknown>[] = [];
+
+  // Regex that matches inline formatting tokens in priority order:
+  // 1. Links: [text](url)
+  // 2. Inline code: `code`
+  // 3. Bold+italic: ***text*** or ___text___
+  // 4. Bold: **text** or __text__
+  // 5. Italic: *text* or _text_  (not preceded/followed by space for _ variant)
+  // 6. Strikethrough: ~~text~~
+  const inlinePattern =
+    /\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~/g;
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = inlinePattern.exec(text)) !== null) {
+    // Push plain text before this match
+    if (match.index > lastIndex) {
+      nodes.push({
+        type: "text",
+        text: text.slice(lastIndex, match.index),
+        styles: {},
+      });
+    }
+
+    if (match[1] !== undefined && match[2] !== undefined) {
+      // Link: [text](url)
+      nodes.push({
+        type: "link",
+        href: match[2],
+        content: [{ type: "text", text: match[1], styles: {} }],
+      });
+    } else if (match[3] !== undefined) {
+      // Inline code
+      nodes.push({ type: "text", text: match[3], styles: { code: true } });
+    } else if (match[4] !== undefined) {
+      // Bold+italic
+      nodes.push({
+        type: "text",
+        text: match[4],
+        styles: { bold: true, italic: true },
+      });
+    } else if (match[5] !== undefined) {
+      // Bold
+      nodes.push({ type: "text", text: match[5], styles: { bold: true } });
+    } else if (match[6] !== undefined) {
+      // Italic
+      nodes.push({ type: "text", text: match[6], styles: { italic: true } });
+    } else if (match[7] !== undefined) {
+      // Strikethrough
+      nodes.push({
+        type: "text",
+        text: match[7],
+        styles: { strikethrough: true },
+      });
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Remaining plain text
+  if (lastIndex < text.length) {
+    nodes.push({ type: "text", text: text.slice(lastIndex), styles: {} });
+  }
+
+  // If nothing was parsed, return at least one empty text node
+  if (nodes.length === 0) {
+    nodes.push({ type: "text", text, styles: {} });
+  }
+
+  return nodes;
+}
+
+// ─── create_note executor ───
+
+async function createNote(input: {
+  title: string;
+  markdown: string;
+  tags?: string[];
+  folderName?: string;
+}): Promise<string> {
+  const supabase = getServerSupabase();
+  if (!supabase) return JSON.stringify({ error: "Database not available" });
+
+  // Resolve the owner user_id from an existing document so the new note
+  // belongs to the same user (service-role key has no auth.uid()).
+  let userId = "local";
+  const { data: sample } = await supabase
+    .from("documents")
+    .select("user_id")
+    .limit(1)
+    .single();
+  if (sample) userId = (sample as { user_id: string }).user_id;
+
+  // Resolve folder by name or path if provided
+  let folderId: string | null = null;
+  if (input.folderName) {
+    // Fetch all folders once for path resolution
+    const { data: allFolders } = await supabase
+      .from("folders")
+      .select("id, name, parent_id");
+    const folders = (allFolders ?? []) as { id: string; name: string; parent_id: string | null }[];
+
+    const segments = input.folderName
+      .split(/ > |\//)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (segments.length > 1) {
+      // Path-based resolution: walk from root through each segment
+      let parentId: string | null = null;
+      for (const seg of segments) {
+        const match = folders.find(
+          (f) =>
+            f.parent_id === parentId &&
+            f.name.toLowerCase() === seg.toLowerCase()
+        );
+        if (!match) {
+          // Try fuzzy match at this level
+          const fuzzy = folders.find(
+            (f) =>
+              f.parent_id === parentId &&
+              f.name.toLowerCase().includes(seg.toLowerCase())
+          );
+          if (!fuzzy) break;
+          parentId = fuzzy.id;
+          folderId = fuzzy.id;
+          continue;
+        }
+        parentId = match.id;
+        folderId = match.id;
+      }
+    } else {
+      // Single name: exact match first, then fuzzy
+      const name = segments[0];
+      const exact = folders.find(
+        (f) => f.name.toLowerCase() === name.toLowerCase()
+      );
+      if (exact) {
+        folderId = exact.id;
+      } else {
+        const fuzzy = folders.find(
+          (f) => f.name.toLowerCase().includes(name.toLowerCase())
+        );
+        if (fuzzy) folderId = fuzzy.id;
+      }
+    }
+  }
+
+  // Convert markdown body to BlockNote blocks
+  const blocks = markdownToBlockNote(input.markdown);
+  const content = JSON.stringify(blocks);
+
+  const id = crypto.randomUUID();
+
+  const { data, error } = await supabase
+    .from("documents")
+    .insert({
+      id,
+      title: input.title,
+      folder_id: folderId,
+      user_id: userId,
+      content,
+      tags: input.tags ?? [],
+      settings: {},
+      doc_type: "note",
+      position: 0,
+    })
+    .select("id, title, folder_id, created_at")
+    .single();
+
+  if (error) return JSON.stringify({ error: error.message });
+
+  const doc = data as { id: string; title: string; folder_id: string | null; created_at: string };
+
+  return JSON.stringify({
+    success: true,
+    id: doc.id,
+    title: doc.title,
+    folderId: doc.folder_id,
+    createdAt: doc.created_at,
+    blockCount: blocks.length,
+  });
+}
+
 // ─── Dispatcher ───
 
 /**
@@ -2045,6 +2403,16 @@ export async function executeTool(
       case "get_recently_modified":
         result = await getRecentlyModified(
           input as { limit?: number; from?: string }
+        );
+        break;
+      case "create_note":
+        result = await createNote(
+          input as {
+            title: string;
+            markdown: string;
+            tags?: string[];
+            folderName?: string;
+          }
         );
         break;
       default:

@@ -54,7 +54,7 @@ export async function fetchFolders(): Promise<DbFolder[]> {
 
   const { data, error } = await supabase!
     .from("folders")
-    .select("*")
+    .select("id, name, parent_id, parent_document_id, user_id, position, created_at, updated_at")
     .order("position", { ascending: true });
 
   if (error) throw error;
@@ -846,11 +846,16 @@ export async function propagatePageLinkTitle(
   docId: string,
   newTitle: string
 ): Promise<void> {
-  const allDocs = isSupabaseConfigured()
-    ? (await supabase!.from("documents").select("id, content").then((r) => r.data)) ?? []
-    : getLocalDocuments();
+  // Only fetch documents whose content actually contains this docId
+  const candidateDocs = isSupabaseConfigured()
+    ? (await supabase!
+        .from("documents")
+        .select("id, content")
+        .like("content", `%${docId}%`)
+        .then((r) => r.data)) ?? []
+    : getLocalDocuments().filter((d) => d.content.includes(docId));
 
-  for (const doc of allDocs) {
+  for (const doc of candidateDocs) {
     const d = doc as { id: string; content: string };
     const updated = updatePageLinkTitlesInContent(d.content, docId, newTitle);
     if (updated) {
@@ -920,11 +925,16 @@ export async function propagateDatabaseRowTitle(
   docId: string,
   newTitle: string
 ): Promise<void> {
-  const allDocs = isSupabaseConfigured()
-    ? (await supabase!.from("documents").select("id, content").then((r) => r.data)) ?? []
-    : getLocalDocuments();
+  // Only fetch documents whose content actually contains this docId
+  const candidateDocs = isSupabaseConfigured()
+    ? (await supabase!
+        .from("documents")
+        .select("id, content")
+        .like("content", `%${docId}%`)
+        .then((r) => r.data)) ?? []
+    : getLocalDocuments().filter((d) => d.content.includes(docId));
 
-  for (const doc of allDocs) {
+  for (const doc of candidateDocs) {
     const d = doc as { id: string; content: string };
     const updated = updateDatabaseRowTitleInContent(d.content, docId, newTitle);
     if (updated) {

@@ -375,7 +375,6 @@ function FloatingAnnotationChat({
 
 export function DocumentEditor({ document }: DocumentEditorProps) {
   const saveDocument = useAppStore((s) => s.saveDocument);
-  const initialize = useAppStore((s) => s.initialize);
   const _dbDocuments = useAppStore((s) => s._dbDocuments);
   const [title, setTitle] = useState(document.title);
   const [subtitle, setSubtitle] = useState(document.subtitle || "");
@@ -447,8 +446,11 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
         onItemClick: async () => {
           // Create silently (no navigation)
           const dbDoc = await dbCreateDocument(null);
-          // Refresh sidebar so new doc appears
-          await initialize();
+          // Add to local state and rebuild tree (no DB re-fetch)
+          const { _dbDocuments } = useAppStore.getState();
+          const newDoc = { ...dbDoc, content: "[]", settings: {} };
+          useAppStore.setState({ _dbDocuments: [..._dbDocuments, newDoc] });
+          useAppStore.getState()._rebuildTree();
           editor.insertInlineContent([
             {
               type: "pageLink" as const,
@@ -519,7 +521,11 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
             (editor as any).getTextCursorPosition().block,
             "after"
           );
-          await initialize();
+          // Add to local state and rebuild tree (no DB re-fetch)
+          const { _dbDocuments: docs2 } = useAppStore.getState();
+          const newRowDoc = { ...rowDoc, content: "[]", settings: {} };
+          useAppStore.setState({ _dbDocuments: [...docs2, newRowDoc] });
+          useAppStore.getState()._rebuildTree();
         },
         aliases: ["database", "table", "db", "spreadsheet"],
         group: "Advanced",
@@ -537,7 +543,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
         query
       );
     },
-    [editor, _dbDocuments, document.id, initialize]
+    [editor, _dbDocuments, document.id]
   );
 
   // ─── @ mention menu (page links) ───
@@ -773,12 +779,11 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
               setEntryInput("");
               if (document.docType === "todo") {
                 await addTodo(text);
-                // Refresh editor blocks after adding
+                // Update editor from cache — addTodo already persisted & cached
                 try {
-                  const { fetchDocument: fetchDoc } = await import("@/lib/db");
-                  const fresh = await fetchDoc(document.id);
-                  if (fresh) {
-                    const parsed = JSON.parse(fresh.content);
+                  const cached = useAppStore.getState()._documentCache.get(document.id);
+                  if (cached) {
+                    const parsed = JSON.parse(cached.content);
                     if (Array.isArray(parsed)) {
                       editor.replaceBlocks(editor.document, parsed);
                     }
@@ -788,10 +793,9 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
                 await addQuickNote(text);
                 // Refresh editor blocks — database block was synced
                 try {
-                  const { fetchDocument: fetchDoc } = await import("@/lib/db");
-                  const fresh = await fetchDoc(document.id);
-                  if (fresh) {
-                    const parsed = JSON.parse(fresh.content);
+                  const cached = useAppStore.getState()._documentCache.get(document.id);
+                  if (cached) {
+                    const parsed = JSON.parse(cached.content);
                     if (Array.isArray(parsed)) {
                       editor.replaceBlocks(editor.document, parsed);
                     }

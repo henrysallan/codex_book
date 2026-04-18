@@ -29,11 +29,17 @@ export async function POST(req: NextRequest) {
 
   let force = false;
   let limit: number | undefined;
+  let documentIds: string[] | undefined;
 
   try {
     const body = await req.json().catch(() => ({}));
     force = body.force === true;
     limit = typeof body.limit === "number" ? body.limit : undefined;
+    if (Array.isArray(body.documentIds)) {
+      documentIds = body.documentIds.filter(
+        (id: unknown) => typeof id === "string"
+      );
+    }
   } catch {
     // empty body is fine — use defaults
   }
@@ -53,7 +59,9 @@ export async function POST(req: NextRequest) {
     .select("id")
     .order("updated_at", { ascending: false });
 
-  if (!force) {
+  if (documentIds && documentIds.length > 0) {
+    query = query.in("id", documentIds);
+  } else if (!force) {
     // Only index documents that haven't been indexed yet or have changed
     query = query.or("index_status.is.null,index_status.neq.indexed");
   }

@@ -2,6 +2,10 @@
 -- server-side callers (chat API) use the service-role key and have no user
 -- JWT, so auth.uid() returns NULL and the function returned zero rows.
 --
+-- NOTE: This migration has been superseded by trigram_search_migration.sql
+-- which includes FTS improvements AND trigram fallback. Run that instead
+-- if applying fresh. Kept here for history.
+--
 -- The chat pipeline already relies on server-side service-role access for
 -- every other retrieval path (match_chunks, match_documents, direct table
 -- queries). This migration brings search_documents in line with that model.
@@ -33,11 +37,16 @@ begin
     d.tags,
     ts_headline(
       'english',
-      regexp_replace(d.content, '[\{\}\[\]":,]', ' ', 'g'),
+      -- Strip BlockNote JSON structure but keep readable text.
+      -- Two passes: first remove JSON keys/delimiters, then collapse whitespace.
+      regexp_replace(
+        regexp_replace(d.content, '"(type|id|props|children|text|styles|content)":\s*', '', 'g'),
+        '[\{\}\[\]",]', ' ', 'g'
+      ),
       websearch_to_tsquery('english', search_query),
-      'MaxWords=20, MinWords=8, ShortWord=3, MaxFragments=1'
+      'MaxWords=30, MinWords=10, ShortWord=2, MaxFragments=2, FragmentDelimiter=" … "'
     ) as snippet,
-    ts_rank(d.fts, websearch_to_tsquery('english', search_query)) as rank,
+    ts_rank_cd(d.fts, websearch_to_tsquery('english', search_query)) as rank,
     d.created_at,
     d.updated_at
   from documents d

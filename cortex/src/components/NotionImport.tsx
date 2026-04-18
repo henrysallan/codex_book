@@ -628,6 +628,19 @@ export function NotionImport({ isOpen, onClose }: NotionImportProps) {
       }
 
       // ═══ Done ══════════════════════════════════════════════════════════
+
+      // Trigger AI indexing for all imported documents (fire-and-forget)
+      const importedDocIds = [...createdDocs.keys()];
+      if (importedDocIds.length > 0) {
+        fetch("/api/ai/backfill", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ documentIds: importedDocIds }),
+        }).catch((err) =>
+          console.error("[NotionImport] backfill trigger failed:", err)
+        );
+      }
+
       setPhase("done");
       setStats(importStats);
       await initialize();

@@ -9,11 +9,12 @@
 
 import Groq from "groq-sdk";
 import { logUsage } from "./usage";
+import { groqLimited } from "./groqLimiter";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY ?? "" });
 const MODEL = "llama-3.1-8b-instant";
 
-export type Tier = "TIER0" | "TIER1" | "TIER2" | "CONTEXT";
+export type Tier = "TIER0" | "TIER1" | "TIER2" | "CONTEXT" | "GENERAL";
 
 interface RouteInput {
   query: string;
@@ -135,6 +136,20 @@ const TIER0_PATTERNS = [
   /^tldr\s*(of\s+this)?/i,
 ];
 
+/**
+ * Forces GENERAL — general knowledge / research questions with no reference
+ * to the user's notes. Claude answers from training data only.
+ */
+const GENERAL_PATTERNS = [
+  /^(who|what|when|where|why|how)\s+(is|was|are|were|did|does|do|can|could|would|will|has|have|had)\s+/i,
+  /^(explain|describe|define|what'?s?|tell\s+me\s+about)\s+(?!this|the\s+(document|note|page))/i,
+  /^(list|name|give\s+me)\s+(all|the|some|examples?\s+of)\s+/i,
+  /^(can\s+you|could\s+you|please)\s+(explain|describe|tell|help\s+me\s+understand)/i,
+  /^(write|draft|compose|create)\s+(a|an|me\s+a)\s+(summary|essay|paragraph|list|outline|overview|poem|story|email|letter)/i,
+  /^(translate|convert)(\s+this)?\s+(to|into)/i,
+  /^(what|how)\s+(are|is)\s+the\s+(difference|similarities?)\s+between/i,
+];
+
 function applyHeuristics(input: RouteInput): Tier | null {
   const { query, hasActiveDocument, contextItemCount } = input;
 
@@ -168,6 +183,17 @@ function applyHeuristics(input: RouteInput): Tier | null {
     }
   }
 
+  // GENERAL — pure research / knowledge questions that don't reference the
+  // user's notes. Only applies when the query has no notes-related keywords.
+  const NOTES_ANCHOR_RE = /\b(my\s+notes?|my\s+documents?|my\s+knowledge\s*base|in\s+my|from\s+my|I\s+(wrote|wrote|noted|have))\b/i;
+  if (!NOTES_ANCHOR_RE.test(query)) {
+    for (const pattern of GENERAL_PATTERNS) {
+      if (pattern.test(query)) {
+        return "GENERAL";
+      }
+    }
+  }
+
   // No document open, no context → must search the knowledge base
   if (!hasActiveDocument) {
     return "TIER1";
@@ -190,18 +216,20 @@ Classify the user's query into exactly one category:
 - TIER0: Answerable from the CURRENT document alone. The user is asking about what they are editing right now ("summarize this", "fix the intro", "what does this paragraph mean").
 - TIER1: Cross-document search where chunk summaries are enough ("what have I written about X", "find my notes on Y").
 - TIER2: Deep cross-document analysis requiring full content ("synthesize my views on X across everything I've written", "compare my notes on A and B").
+- GENERAL: General knowledge or research question that does NOT reference the user's notes. The user wants Claude to answer from its own training knowledge, not from their notebook. Examples: "who was Simone Weil", "explain quantum entanglement", "what is the difference between utilitarianism and deontology", "write me a summary of The Republic", "list all of Camus's published works".
 
 Guidance:
-- Questions that reference "my notes", "my notebook", "my knowledge base" are almost always TIER1 or TIER2, NEVER TIER0 — even if a document is open.
-- Questions like "explain X", "tell me about X", "what is X" (without "in this document") usually want TIER1, because the user is asking about a topic, not the current buffer.
+- Questions that reference "my notes", "my notebook", "my knowledge base" are almost always TIER1 or TIER2, NEVER TIER0 or GENERAL — even if a document is open.
+- Questions like "explain X", "tell me about X", "what is X" (without "in this document" or "in my notes") are GENERAL — the user wants research, not retrieval.
 - Only pick TIER0 when the query explicitly points at the current document ("this", "the paragraph above", "the intro I just wrote") or is clearly a rewrite/polish task on the current text.
+- Pick GENERAL when the query is asking for factual knowledge, definitions, explanations, creative writing, or research that doesn't depend on the user's personal notes.
 - Prefer TIER1 over TIER2 when in doubt — TIER2 is expensive.
 
 Context flag: ${hasActiveDocument ? "a document IS open in the editor." : "NO document is open in the editor."}
 
-Respond with exactly one token: TIER0, TIER1, or TIER2.`;
+Respond with exactly one token: TIER0, TIER1, TIER2, or GENERAL.`;
 
-    const response = await groq.chat.completions.create({
+    const response = await groqLimited(() => groq.chat.completions.create({
       model: MODEL,
       messages: [
         { role: "system", content: systemPrompt },
@@ -209,7 +237,7 @@ Respond with exactly one token: TIER0, TIER1, or TIER2.`;
       ],
       max_tokens: 4,
       temperature: 0,
-    });
+    }));
 
     const text = response.choices[0]?.message?.content?.trim().toUpperCase() ?? "";
 
@@ -228,6 +256,7 @@ Respond with exactly one token: TIER0, TIER1, or TIER2.`;
     // Parse response — TIER0 only honored when a doc is actually open.
     if (text.includes("TIER0") && hasActiveDocument) return "TIER0";
     if (text.includes("TIER2")) return "TIER2";
+    if (text.includes("GENERAL")) return "GENERAL";
     // Default to TIER1 for TIER1, ambiguous, or any unrecognised response.
     return "TIER1";
   } catch (err) {

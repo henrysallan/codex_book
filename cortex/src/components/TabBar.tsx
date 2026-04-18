@@ -1,7 +1,14 @@
 "use client";
 
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useAppStore } from "@/lib/store";
 import { X, FileText, ChevronLeft, ChevronRight, Home, HardDrive } from "lucide-react";
+
+interface ContextMenu {
+  x: number;
+  y: number;
+  tabId: string;
+}
 
 export function TabBar() {
   const openTabs = useAppStore((s) => s.openTabs);
@@ -14,6 +21,56 @@ export function TabBar() {
   const canGoForward = useAppStore((s) => s.canGoForward);
 
   const isHome = activeDocumentId === null;
+
+  const [ctxMenu, setCtxMenu] = useState<ContextMenu | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close context menu on outside click or Escape
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setCtxMenu(null);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCtxMenu(null);
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [ctxMenu]);
+
+  const closeAllTabs = useCallback(() => {
+    const tabs = useAppStore.getState().openTabs;
+    tabs.forEach((t) => closeTab(t.documentId));
+    setCtxMenu(null);
+  }, [closeTab]);
+
+  const closeOtherTabs = useCallback(
+    (keepId: string) => {
+      const tabs = useAppStore.getState().openTabs;
+      tabs.forEach((t) => {
+        if (t.documentId !== keepId) closeTab(t.documentId);
+      });
+      setCtxMenu(null);
+    },
+    [closeTab]
+  );
+
+  const closeTabsToRight = useCallback(
+    (fromId: string) => {
+      const tabs = useAppStore.getState().openTabs;
+      const idx = tabs.findIndex((t) => t.documentId === fromId);
+      if (idx === -1) return;
+      tabs.slice(idx + 1).forEach((t) => closeTab(t.documentId));
+      setCtxMenu(null);
+    },
+    [closeTab]
+  );
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 overflow-x-auto border-b border-border bg-white">
@@ -71,6 +128,10 @@ export function TabBar() {
                 setActiveTab(tab.documentId);
               }
             }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setCtxMenu({ x: e.clientX, y: e.clientY, tabId: tab.documentId });
+            }}
           >
             {tab.driveFile ? (
               <HardDrive size={10} className="text-muted-foreground" />
@@ -92,6 +153,44 @@ export function TabBar() {
           </div>
         );
       })}
+
+      {/* Right-click context menu */}
+      {ctxMenu && (
+        <div
+          ref={menuRef}
+          className="fixed z-50 min-w-[160px] rounded-lg border border-border bg-white shadow-lg py-1 text-xs"
+          style={{ top: ctxMenu.y, left: ctxMenu.x }}
+        >
+          <button
+            className="w-full text-left px-3 py-1.5 hover:bg-black/5 text-foreground transition-colors"
+            onClick={() => {
+              closeTab(ctxMenu.tabId);
+              setCtxMenu(null);
+            }}
+          >
+            Close
+          </button>
+          <button
+            className="w-full text-left px-3 py-1.5 hover:bg-black/5 text-foreground transition-colors"
+            onClick={() => closeOtherTabs(ctxMenu.tabId)}
+          >
+            Close Others
+          </button>
+          <button
+            className="w-full text-left px-3 py-1.5 hover:bg-black/5 text-foreground transition-colors"
+            onClick={() => closeTabsToRight(ctxMenu.tabId)}
+          >
+            Close to the Right
+          </button>
+          <div className="my-1 border-t border-border" />
+          <button
+            className="w-full text-left px-3 py-1.5 hover:bg-black/5 text-foreground transition-colors"
+            onClick={closeAllTabs}
+          >
+            Close All
+          </button>
+        </div>
+      )}
     </div>
   );
 }

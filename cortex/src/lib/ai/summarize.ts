@@ -5,6 +5,7 @@
 
 import Groq from "groq-sdk";
 import { logUsage } from "./usage";
+import { groqLimited } from "./groqLimiter";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY ?? "" });
 
@@ -31,7 +32,7 @@ export async function summarizeChunk(
       ? existingTags.join(", ")
       : "(none yet — create new tags as needed)";
 
-  const response = await groq.chat.completions.create({
+  const response = await groqLimited(() => groq.chat.completions.create({
     model: MODEL,
     messages: [
       {
@@ -64,7 +65,7 @@ Rules for tags:
     ],
     temperature: 0.3,
     max_tokens: 300,
-  });
+  }));
 
   const usage = response.usage;
   if (usage) {
@@ -110,7 +111,7 @@ export async function summarizeDocument(
     .map((s, i) => `${i + 1}. ${s}`)
     .join("\n");
 
-  const response = await groq.chat.completions.create({
+  const response = await groqLimited(() => groq.chat.completions.create({
     model: MODEL,
     messages: [
       {
@@ -128,7 +129,7 @@ Write a 2-3 sentence summary of the entire document. Capture the overall scope, 
     ],
     temperature: 0.3,
     max_tokens: 300,
-  });
+  }));
 
   const usage = response.usage;
   if (usage) {
@@ -163,7 +164,7 @@ export async function tagDocument(
       ? existingTags.join(", ")
       : "(none yet — create new tags as needed)";
 
-  const response = await groq.chat.completions.create({
+  const response = await groqLimited(() => groq.chat.completions.create({
     model: MODEL,
     messages: [
       {
@@ -197,7 +198,7 @@ Rules:
     ],
     temperature: 0.3,
     max_tokens: 300,
-  });
+  }));
 
   const usage = response.usage;
   if (usage) {
@@ -216,7 +217,7 @@ Rules:
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("No JSON found in response");
     const parsed = JSON.parse(jsonMatch[0]);
-    return Array.isArray(parsed.tags) ? parsed.tags.map(String) : [];
+    return Array.isArray(parsed.tags) ? parsed.tags.map(String).slice(0, 10) : [];
   } catch {
     console.warn("[summarize] Failed to parse document tags response:", raw);
     return [];

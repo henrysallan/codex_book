@@ -12,6 +12,7 @@ import {
   keywordResultsToChunks,
   fetchDocumentsById,
   fetchDocumentTitles,
+  rerankChunks,
 } from "@/lib/ai/retrieve";
 import type { SourceMap } from "@/lib/types";
 import {
@@ -19,6 +20,7 @@ import {
   assembleTier1Context,
   assembleTier2Context,
   assembleContextTierContext,
+  assembleGeneralContext,
   selectModel,
   type ContextItem,
 } from "@/lib/ai/context";
@@ -98,6 +100,14 @@ export async function POST(req: NextRequest) {
     let documentIds: string[] = [];
     let sourceMap: SourceMap = {};
 
+    if (tier === "GENERAL") {
+      // Research mode — no retrieval, Claude answers from training data
+      const ctx = assembleGeneralContext();
+      systemPrompt = ctx.systemPrompt;
+      contextTokens = ctx.contextTokens;
+      console.log("[/api/ai/chat] GENERAL tier — no retrieval, research mode");
+    }
+
     if (tier === "TIER0") {
       // Current document only
       if (!activeDocumentId) {
@@ -136,10 +146,12 @@ export async function POST(req: NextRequest) {
       const kwChunks = keywordResultsToChunks(kwResults, vectorDocIds);
 
       // Merge: vector chunks first (higher precision), then keyword chunks
-      const allChunks = [...vectorChunks, ...kwChunks];
+      // Then rerank all results by combined score (similarity + term overlap + source signal)
+      const merged = [...vectorChunks, ...kwChunks];
+      const allChunks = rerankChunks(merged, effectiveQuery, { limit: 20 });
 
       console.log(
-        `[/api/ai/chat] TIER1 hybrid: ${vectorChunks.length} vector chunks + ${kwChunks.length} keyword docs = ${allChunks.length} total`
+        `[/api/ai/chat] TIER1 hybrid: ${vectorChunks.length} vector chunks + ${kwChunks.length} keyword docs = ${merged.length} merged → ${allChunks.length} after rerank`
       );
 
       // Fetch titles for all unique doc IDs so sourceMap has real names
@@ -384,6 +396,30 @@ export async function POST(req: NextRequest) {
                   ),
                 }))
               );
+
+            // Notify client if a note was created so it can refresh the sidebar
+            for (let ti = 0; ti < toolBlocks.length; ti++) {
+              if (toolBlocks[ti].name === "create_note") {
+                try {
+                  const result = JSON.parse(
+                    toolResults[ti].content as string
+                  );
+                  if (result.success && result.id) {
+                    controller.enqueue(
+                      encoder.encode(
+                        `data: ${JSON.stringify({
+                          type: "doc_created",
+                          docId: result.id,
+                          title: result.title,
+                        })}\n\n`
+                      )
+                    );
+                  }
+                } catch {
+                  // skip if result isn't parseable
+                }
+              }
+            }
 
             // Append assistant response + tool results for next round
             currentMessages.push({

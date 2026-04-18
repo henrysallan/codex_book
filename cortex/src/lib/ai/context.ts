@@ -57,6 +57,33 @@ Answer the user's question based on this document. If the answer isn't in the do
   };
 }
 
+// ─── GENERAL: Research / general knowledge (no retrieval) ───
+
+/**
+ * Build context for GENERAL tier — pure research mode.
+ * No retrieval, no document context. Claude answers from training data.
+ */
+export function assembleGeneralContext(): {
+  systemPrompt: string;
+  contextTokens: number;
+} {
+  const systemPrompt = `${BASE_SYSTEM}
+
+The user is asking a general knowledge or research question that does not reference their personal notes. Answer from your own knowledge.
+
+Additional guidance for research mode:
+- Be thorough and informative — the user is using you as a research companion.
+- Structure your answer clearly with headings, lists, or numbered points where appropriate.
+- If the topic is nuanced or debated, present multiple perspectives.
+- If you're unsure about a fact, say so rather than guessing.
+- The user may want to copy parts of your answer into their notes, so write in a way that stands on its own.`;
+
+  return {
+    systemPrompt,
+    contextTokens: estimateTokens(systemPrompt),
+  };
+}
+
 // ─── Tier 1: Summary scan ───
 
 /**

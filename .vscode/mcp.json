@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "claude-code-explorer": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "warrioraashuu-codemaster"],
+      "env": {
+        "CLAUDE_CODE_SRC_ROOT": "/Users/henryallan/claude-code/src"
+      }
+    }
+  }
+}

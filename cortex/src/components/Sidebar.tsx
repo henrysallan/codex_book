@@ -192,12 +192,13 @@ export function Sidebar({ onOpenImport, onOpenSettings }: { onOpenImport?: () =>
 
   const confirmDelete = async () => {
     if (!pendingDelete) return;
-    if (pendingDelete.type === "doc") {
-      await deleteDocument(pendingDelete.id);
-    } else {
-      await deleteFolder(pendingDelete.id);
-    }
+    const { type, id } = pendingDelete;
     setPendingDelete(null);
+    if (type === "doc") {
+      await deleteDocument(id);
+    } else {
+      await deleteFolder(id);
+    }
   };
 
   // Require 5px movement before starting a drag — so clicks still work

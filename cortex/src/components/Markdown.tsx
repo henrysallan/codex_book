@@ -113,17 +113,41 @@ function buildComponents(
         }
       }
 
-      // Regular external link
-      return (
-        <a
-          href={href}
-          className="text-blue-600 hover:underline"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {children}
-        </a>
-      );
+      // Internal document link: LLM sometimes generates markdown links with
+      // document UUIDs as the href (e.g. from tool results). Navigate in-app
+      // instead of opening a new tab.
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (href && UUID_RE.test(href) && onCiteClick) {
+        return (
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              onCiteClick(href);
+            }}
+            className="text-blue-600 hover:underline cursor-pointer"
+          >
+            {children}
+          </button>
+        );
+      }
+
+      // External link
+      if (href && /^https?:\/\/|^mailto:/i.test(href)) {
+        return (
+          <a
+            href={href}
+            className="text-blue-600 hover:underline"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {children}
+          </a>
+        );
+      }
+
+      // Non-external, non-UUID link — render as inert text to avoid
+      // navigating away from the app
+      return <span className="text-blue-600">{children}</span>;
     },
 
     // Blockquotes

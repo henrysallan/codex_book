@@ -11,6 +11,10 @@ import {
   TextQuote,
   Loader2,
   Search,
+  Copy,
+  Check,
+  Globe,
+  BookOpen,
 } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import type { SourceMap } from "@/lib/types";
@@ -42,6 +46,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_document_hierarchy: "Tracing document tree…",
   compare_documents: "Comparing documents…",
   get_recently_modified: "Finding recent edits…",
+  create_note: "Creating note…",
 };
 
 interface ChatMeta {
@@ -49,6 +54,32 @@ interface ChatMeta {
   model?: string;
   documentIds?: string[];
   sourceMap?: SourceMap;
+}
+
+// ─── Copy button shown on hover for assistant messages ───
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Fallback: noop
+    }
+  }, [text]);
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="absolute right-0 top-0 opacity-0 group-hover/assistant:opacity-100 transition-opacity p-1 rounded hover:bg-black/[0.06] text-muted-foreground hover:text-foreground"
+      title="Copy to clipboard"
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+    </button>
+  );
 }
 
 export function ChatPanel() {
@@ -60,6 +91,7 @@ export function ChatPanel() {
   const removeContextItem = useAppStore((s) => s.removeContextItem);
   const openDocument = useAppStore((s) => s.openDocument);
   const clearContextItems = useAppStore((s) => s.clearContextItems);
+  const initialize = useAppStore((s) => s.initialize);
   const _dbDocuments = useAppStore((s) => s._dbDocuments);
   const [input, setInput] = useState("");
   const [model, setModel] = useState("Auto");
@@ -69,6 +101,7 @@ export function ChatPanel() {
   const [lastMeta, setLastMeta] = useState<ChatMeta | null>(null);
   const [streamingSourceMap, setStreamingSourceMap] = useState<SourceMap | undefined>(undefined);
   const [toolInProgress, setToolInProgress] = useState<string | null>(null);
+  const [researchMode, setResearchMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -148,7 +181,7 @@ export function ChatPanel() {
           activeDocumentId: activeDocument?.id ?? null,
           activeDocumentContent: activeDocument?.content ?? undefined,
           contextItems: resolvedContextItems,
-          tier: tierOverride ?? undefined,
+          tier: tierOverride ?? (researchMode ? "GENERAL" : undefined),
           modelOverride: model !== "Auto" ? model : undefined,
         };
         console.log("[ChatPanel] Sending request:", {
@@ -204,6 +237,9 @@ export function ChatPanel() {
                 meta.tier = event.tier;
                 meta.documentIds = event.documentIds;
                 if (event.sourceMap) meta.sourceMap = event.sourceMap;
+              } else if (event.type === "doc_created") {
+                // A note was created by the AI — refresh sidebar
+                initialize();
               } else if (event.type === "error") {
                 accumulated += `\n\n⚠️ Error: ${event.content}`;
                 setStreamingContent(accumulated);
@@ -232,7 +268,7 @@ export function ChatPanel() {
         abortRef.current = null;
       }
     },
-    [isStreaming, chatMessages, activeDocument, contextItems, addChatMessage]
+    [isStreaming, chatMessages, activeDocument, contextItems, addChatMessage, initialize]
   );
 
   const handleSend = () => {
@@ -290,7 +326,7 @@ export function ChatPanel() {
           <div
             key={msg.id}
             className={`text-sm ${
-              msg.role === "user" ? "text-foreground" : "text-muted-foreground"
+              msg.role === "user" ? "text-foreground" : "text-muted-foreground group/assistant relative"
             }`}
           >
             <div className="text-[10px] text-muted mb-0.5 uppercase tracking-wider">
@@ -301,19 +337,22 @@ export function ChatPanel() {
                 {msg.content}
               </p>
             ) : (
-              <Markdown
-                content={msg.content}
-                className="text-[13px]"
-                sourceMap={msg.sourceMap}
-                onCiteClick={openDocument}
-              />
+              <>
+                <CopyButton text={msg.content} />
+                <Markdown
+                  content={msg.content}
+                  className="text-[13px]"
+                  sourceMap={msg.sourceMap}
+                  onCiteClick={openDocument}
+                />
+              </>
             )}
           </div>
         ))}
 
         {/* Streaming response */}
         {isStreaming && (
-          <div className="text-sm text-muted-foreground">
+          <div className="text-sm text-muted-foreground group/assistant relative pl-6">
             <div className="text-[10px] text-muted mb-0.5 uppercase tracking-wider flex items-center gap-1">
               Cortex
               {!streamingContent && !toolInProgress && (
@@ -444,7 +483,7 @@ export function ChatPanel() {
                 handleSend();
               }
             }}
-            placeholder={isStreaming ? "Waiting for response…" : "Ask about your notes…"}
+            placeholder={isStreaming ? "Waiting for response…" : researchMode ? "Ask anything…" : "Ask about your notes…"}
             rows={2}
             disabled={isStreaming}
             className="w-full text-sm bg-transparent border-none outline-none resize-none placeholder:text-black/16 disabled:opacity-50"
@@ -479,14 +518,30 @@ export function ChatPanel() {
               )}
             </div>
 
-            {/* Send button */}
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || isStreaming}
-              className="p-1 rounded text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
-            >
-              <Send size={14} />
-            </button>
+            <div className="flex items-center gap-1.5">
+              {/* Research mode toggle */}
+              <button
+                onClick={() => setResearchMode(!researchMode)}
+                className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] transition-colors ${
+                  researchMode
+                    ? "bg-blue-50 text-blue-600 border border-blue-200"
+                    : "text-muted-foreground hover:text-foreground hover:bg-black/[0.04]"
+                }`}
+                title={researchMode ? "Research mode: answering from general knowledge" : "Notes mode: searching your knowledge base"}
+              >
+                {researchMode ? <Globe size={12} /> : <BookOpen size={12} />}
+                {researchMode ? "Research" : "Notes"}
+              </button>
+
+              {/* Send button */}
+              <button
+                onClick={handleSend}
+                disabled={!input.trim() || isStreaming}
+                className="p-1 rounded text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
+              >
+                <Send size={14} />
+              </button>
+            </div>
           </div>
         </div>
       </div>

@@ -489,6 +489,72 @@ export async function fetchDocumentsById(
   }));
 }
 
+// ─── Rerank merged chunks ───
+
+/**
+ * Rerank merged hybrid results (vector + keyword) using a weighted scoring
+ * formula. Considers: vector similarity, keyword source signal, query-term
+ * overlap in chunk content, and chunk position (earlier = more important).
+ *
+ * Returns a new array sorted by combined score, trimmed to `limit`.
+ */
+export function rerankChunks(
+  chunks: ChunkResult[],
+  query: string,
+  options?: { limit?: number }
+): ChunkResult[] {
+  const limit = options?.limit ?? 20;
+  if (chunks.length === 0) return [];
+
+  const queryTerms = extractKeywords(query);
+
+  const scored = chunks.map((chunk) => {
+    // 1. Base similarity score (0-1), already provided
+    const simScore = chunk.similarity;
+
+    // 2. Query-term overlap: what fraction of query keywords appear in content?
+    const contentLower = (chunk.content ?? "").toLowerCase();
+    const matchedTerms = queryTerms.filter((t) => contentLower.includes(t));
+    const overlapScore =
+      queryTerms.length > 0 ? matchedTerms.length / queryTerms.length : 0;
+
+    // 3. Exact phrase bonus: full query appears verbatim in content
+    const phraseBonus = contentLower.includes(query.toLowerCase().trim())
+      ? 0.1
+      : 0;
+
+    // 4. Source-type signal: real vector chunks are more precise than
+    //    synthetic keyword chunks (chunk_index === -1)
+    const sourceBonus = chunk.chunk_index >= 0 ? 0.05 : 0;
+
+    // 5. Position bonus: earlier chunks in a document tend to be more
+    //    relevant (intro, abstract, thesis statement)
+    const positionBonus =
+      chunk.chunk_index >= 0
+        ? Math.max(0, 0.03 * (1 - chunk.chunk_index / 20))
+        : 0;
+
+    // Combined score (weights chosen so similarity dominates but term
+    // overlap can boost or rescue marginal results)
+    const combined =
+      simScore * 0.55 +
+      overlapScore * 0.25 +
+      phraseBonus +
+      sourceBonus +
+      positionBonus;
+
+    return { chunk, combined };
+  });
+
+  return scored
+    .sort((a, b) => b.combined - a.combined)
+    .slice(0, limit)
+    .map(({ chunk, combined }) => ({
+      ...chunk,
+      similarity: combined, // replace with reranked score
+    }));
+}
+
 // ─── Fetch document titles (lightweight) ───
 
 /**

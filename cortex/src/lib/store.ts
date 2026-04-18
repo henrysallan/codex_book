@@ -169,6 +169,7 @@ interface AppState {
 
   // Actions
   initialize: () => Promise<void>;
+  _rebuildTree: () => void;
   goBack: () => Promise<void>;
   goForward: () => Promise<void>;
   canGoBack: () => boolean;
@@ -257,6 +258,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   quickNoteParentId: null,
   quickNotes: [],
   dashboardReady: false,
+
+  /** Rebuild sidebar tree from in-memory _dbFolders / _dbDocuments and persist cache.
+   *  Use this after local mutations instead of initialize() to avoid a full DB re-fetch. */
+  _rebuildTree: () => {
+    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const folders = buildFolderTree(_dbFolders, _dbDocuments, expandedFolderIds);
+    const rootDocs = getRootDocuments(_dbDocuments, _dbFolders);
+    set({ folders, rootDocuments: rootDocs });
+    persistSidebarCache({ _dbFolders, _dbDocuments });
+  },
 
   canGoBack: () => get().navIndex > 0,
   canGoForward: () => get().navIndex < get().navHistory.length - 1,
@@ -509,18 +520,38 @@ export const useAppStore = create<AppState>((set, get) => ({
       _dbFolders: newFolders,
       folders: buildFolderTree(newFolders, _dbDocuments, expandedFolderIds),
     });
-    // Persist in background then reconcile
-    dbCreateFolder(name, parentId).then(() => get().initialize()).catch(console.error);
+    // Persist in background then reconcile with real data
+    dbCreateFolder(name, parentId).then((realFolder) => {
+      const docs = get()._dbDocuments;
+      const folders = get()._dbFolders.map((f) => f.id === tempFolder.id ? realFolder : f);
+      set({ _dbFolders: folders });
+      get()._rebuildTree();
+    }).catch(console.error);
   },
 
   renameFolder: async (id: string, name: string) => {
-    await dbRenameFolder(id, name);
-    await get().initialize();
+    // Optimistic: update in local state immediately
+    const { _dbFolders } = get();
+    set({ _dbFolders: _dbFolders.map((f) => f.id === id ? { ...f, name, updated_at: new Date().toISOString() } : f) });
+    get()._rebuildTree();
+    dbRenameFolder(id, name).catch(console.error);
   },
 
   deleteFolder: async (id: string) => {
-    await dbDeleteFolder(id);
-    await get().initialize();
+    // Optimistic: remove from local state
+    const { _dbFolders, _dbDocuments } = get();
+    const folderIds = new Set<string>();
+    const collect = (fid: string) => {
+      folderIds.add(fid);
+      _dbFolders.filter((f) => f.parent_id === fid).forEach((f) => collect(f.id));
+    };
+    collect(id);
+    set({
+      _dbFolders: _dbFolders.filter((f) => !folderIds.has(f.id)),
+      _dbDocuments: _dbDocuments.filter((d) => !d.folder_id || !folderIds.has(d.folder_id)),
+    });
+    get()._rebuildTree();
+    dbDeleteFolder(id).catch(console.error);
   },
 
   createDocument: async (folderId: string | null = null, docType: import("./types").DocType = "note") => {
@@ -609,16 +640,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       } catch (err) {
         console.error("Failed to propagate database row title:", err);
       }
-    }
 
-    // Refresh tree
-    await get().initialize();
+      // Update title in _dbDocuments and rebuild tree (no DB re-fetch)
+      const { _dbDocuments: docs } = get();
+      set({ _dbDocuments: docs.map((d) => d.id === id ? { ...d, title: updates.title! } : d) });
+      get()._rebuildTree();
+    }
   },
 
   deleteDocument: async (id: string) => {
     get().closeTab(id);
-    await dbDeleteDocument(id);
-    await get().initialize();
+    // Optimistic: remove from local state
+    const { _dbDocuments: docs } = get();
+    set({ _dbDocuments: docs.filter((d) => d.id !== id) });
+    get()._rebuildTree();
+    dbDeleteDocument(id).catch(console.error);
   },
 
   moveDocument: async (docId: string, folderId: string | null) => {
@@ -632,7 +668,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       folders: buildFolderTree(_dbFolders, newDocs, expandedFolderIds),
       rootDocuments: getRootDocuments(newDocs, _dbFolders),
     });
-    dbMoveDocument(docId, folderId).then(() => get().initialize()).catch(console.error);
+    dbMoveDocument(docId, folderId).then(() => {
+      // Reconcile: update with server-confirmed data
+      get()._rebuildTree();
+    }).catch(console.error);
   },
 
   moveFolder: async (folderId: string, parentId: string | null, parentDocumentId: string | null = null) => {
@@ -648,7 +687,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       folders: buildFolderTree(newFolders, _dbDocuments, expandedFolderIds),
       rootDocuments: getRootDocuments(_dbDocuments, newFolders),
     });
-    dbMoveFolder(folderId, parentId, parentDocumentId).then(() => get().initialize()).catch(console.error);
+    dbMoveFolder(folderId, parentId, parentDocumentId).then(() => {
+      get()._rebuildTree();
+    }).catch(console.error);
   },
 
   setParentDocument: async (docId: string, parentDocId: string | null) => {
@@ -669,7 +710,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       folders: buildFolderTree(_dbFolders, newDocs, expandedFolderIds),
       rootDocuments: getRootDocuments(newDocs, _dbFolders),
     });
-    dbSetParentDocument(docId, parentDocId).then(() => get().initialize()).catch(console.error);
+    dbSetParentDocument(docId, parentDocId).then(() => {
+      get()._rebuildTree();
+    }).catch(console.error);
   },
 
   toggleChat: () =>
@@ -1022,8 +1065,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Prepend to the list (newest first)
       set({ quickNotes: [newItem, ...get().quickNotes] });
 
-      // Refresh sidebar tree so the new doc shows up
-      await get().initialize();
+      // Add the new doc to local state and rebuild tree (no DB re-fetch)
+      const dbDoc: DbDocument = {
+        id: newDoc.id,
+        title: newDoc.title,
+        subtitle: null,
+        folder_id: newDoc.folder_id,
+        parent_document_id: newDoc.parent_document_id,
+        user_id: newDoc.user_id,
+        content: newDoc.content,
+        tags: newDoc.tags ?? [],
+        settings: {},
+        doc_type: newDoc.doc_type ?? "note",
+        position: newDoc.position ?? 0,
+        share_slug: newDoc.share_slug ?? null,
+        created_at: newDoc.created_at,
+        updated_at: newDoc.updated_at,
+      };
+      set({ _dbDocuments: [...get()._dbDocuments, dbDoc] });
+      get()._rebuildTree();
     } catch (err) {
       console.error("Failed to create quick note:", err);
     }
