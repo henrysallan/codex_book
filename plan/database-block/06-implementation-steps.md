@@ -8,7 +8,7 @@ Ordered checklist. Each step should result in a building, working state.
 
 ### Step 1: Install dependency
 ```bash
-cd cortex && npm install @tanstack/react-table
+npm install @tanstack/react-table
 ```
 
 ### Step 2: Create types file

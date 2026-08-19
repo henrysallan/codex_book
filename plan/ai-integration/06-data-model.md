@@ -282,7 +282,7 @@ Called at the end of every API route handler, after the LLM response completes.
 
 ## TypeScript Types
 
-New types to add to [types.ts](../../cortex/src/lib/types.ts):
+New types to add to [types.ts](../../src/lib/types.ts):
 
 ```typescript
 export interface DbDocumentChunk {

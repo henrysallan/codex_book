@@ -232,25 +232,24 @@ Phase 1: Foundation
 ## File Structure (New Files)
 
 ```
-cortex/
-  src/
-    app/
-      api/
-        ai/
-          chat/route.ts        # Flow 1 & 2
-          annotate/route.ts    # Flow 3
-          index/route.ts       # Trigger indexing
-          backfill/route.ts    # One-time bulk index
-    lib/
+src/
+  app/
+    api/
       ai/
-        chunker.ts             # BlockNote → chunks
-        summarize.ts           # Groq summarization & tagging
-        embed.ts               # OpenAI embedding
-        router.ts              # Query routing
-        retrieve.ts            # Vector search & retrieval
-        context.ts             # Context assembly for each tier
-        indexDocument.ts       # Pipeline orchestrator
-        usage.ts               # Token usage logging helper
-  supabase/
-    ai_migration.sql           # All new tables, columns, functions
+        chat/route.ts        # Flow 1 & 2
+        annotate/route.ts    # Flow 3
+        index/route.ts       # Trigger indexing
+        backfill/route.ts    # One-time bulk index
+  lib/
+    ai/
+      chunker.ts             # BlockNote → chunks
+      summarize.ts           # Groq summarization & tagging
+      embed.ts               # OpenAI embedding
+      router.ts              # Query routing
+      retrieve.ts            # Vector search & retrieval
+      context.ts             # Context assembly for each tier
+      indexDocument.ts       # Pipeline orchestrator
+      usage.ts               # Token usage logging helper
+supabase/
+  ai_migration.sql           # All new tables, columns, functions
 ```
