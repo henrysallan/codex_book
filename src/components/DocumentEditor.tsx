@@ -383,6 +383,10 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const indexTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [syncStatus, setSyncStatus] = useState<"synced" | "pending" | "saving" | "error">("synced");
+  const [lastSavedAt, setLastSavedAt] = useState(() =>
+    document.updatedAt ? new Date(document.updatedAt).getTime() : Date.now()
+  );
+  const [now, setNow] = useState(Date.now());
   const containerRef = useRef<HTMLDivElement>(null);
   const loadAnnotations = useAppStore((s) => s.loadAnnotations);
   const [noteSettings, setNoteSettings] = useState<NoteSettings>(document.settings ?? {});
@@ -429,6 +433,11 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
     dictionary: {
       ...locales.en,
       multi_column: multiColumnLocales.en,
+    },
+    domAttributes: {
+      editor: {
+        style: "padding-inline:0;padding-left:0;padding-right:0",
+      },
     },
   });
 
@@ -596,6 +605,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
           console.error("Failed to sync backlinks:", err);
         }
         setSyncStatus("synced");
+        setLastSavedAt(Date.now());
 
         // Debounced AI indexing (30s after last save)
         if (indexTimeoutRef.current) {
@@ -701,6 +711,19 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
 
   const activeAnnotation = useAppStore((s) => s.activeAnnotation);
 
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const savedSec = Math.max(0, Math.floor((now - lastSavedAt) / 1000));
+  const savedLabel =
+    savedSec < 20 ? "now" :
+    savedSec < 60 ? `${savedSec}s` :
+    savedSec < 3600 ? `${Math.floor(savedSec / 60)}m` :
+    savedSec < 86400 ? `${Math.floor(savedSec / 3600)}h` :
+    new Date(lastSavedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
   return (
     <div ref={containerRef} className="relative">
       {/* Sync status dot */}
@@ -729,6 +752,12 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
                   syncStatus === "error" ? "0 0 4px rgba(239,68,68,0.5)" : undefined,
               }}
             />
+            <span
+              className="text-[10px] leading-none text-muted-foreground pointer-events-auto tabular-nums"
+              title={new Date(lastSavedAt).toLocaleString()}
+            >
+              {savedLabel}
+            </span>
           </div>
           {/* Right: settings */}
           <NoteSettingsButton settings={noteSettings} onChange={handleSettingsChange} docId={document.id} shareSlug={document.shareSlug} />
@@ -762,7 +791,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
             if (e.key === "Enter") e.currentTarget.blur();
           }}
           placeholder="Title"
-          className="w-full font-normal text-foreground bg-transparent border-none outline-none placeholder:text-muted leading-tight"
+          className="w-full font-normal text-foreground bg-transparent border-none outline-none placeholder:text-muted leading-tight p-0"
           style={{ fontSize: 'calc(var(--note-font-size, 16px) * 2.4375)' }}
         />
         )}
@@ -770,7 +799,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
 
       {/* Inline entry input for todo / quick notes parent */}
       {hasEntryInput && (
-        <div className="mb-4 pl-14">
+        <div className="mb-4">
           <form
             onSubmit={async (e) => {
               e.preventDefault();
@@ -826,7 +855,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
 
       {/* Subtitle + Tags */}
       {!isIndexDoc && (
-      <div className="mb-8 pl-14 space-y-2">
+      <div className="mb-8 space-y-2">
         <input
           type="text"
           value={subtitle}
@@ -836,7 +865,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
             if (e.key === "Enter") e.currentTarget.blur();
           }}
           placeholder="Subtitle"
-          className="w-full text-foreground bg-transparent border-none outline-none placeholder:text-muted"
+          className="w-full text-foreground bg-transparent border-none outline-none placeholder:text-muted p-0"
           style={{ fontSize: 'calc(var(--note-font-size, 16px) * 1.125)' }}
         />
 
@@ -890,6 +919,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
           slashMenu={false}
           sideMenu={false}
           formattingToolbar={false}
+          className="[&_.bn-editor]:!px-0"
         >
           {!isIndexDoc && (
             <>

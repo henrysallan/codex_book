@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAppStore } from "@/lib/store";
-import { useAuth } from "@/lib/auth";
 import { Folder, DocumentMeta, DocType } from "@/lib/types";
 import {
   DndContext,
@@ -17,6 +16,7 @@ import {
 } from "@dnd-kit/core";
 import {
   ChevronRight,
+  ChevronLeft,
   ChevronDown,
   FileText,
   FolderIcon,
@@ -24,9 +24,8 @@ import {
   Plus,
   Settings,
   MessageSquare,
+  MessageSquarePlus,
   Trash2,
-  LogOut,
-  Upload,
   AlertTriangle,
   Pencil,
   CheckSquare,
@@ -36,7 +35,7 @@ import {
 } from "lucide-react";
 import { DriveFolder } from "@/components/DriveFolder";
 
-export function Sidebar({ onOpenImport, onOpenSettings }: { onOpenImport?: () => void; onOpenSettings?: () => void }) {
+export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const folders = useAppStore((s) => s.folders);
   const rootDocuments = useAppStore((s) => s.rootDocuments);
   const activeDocumentId = useAppStore((s) => s.activeDocumentId);
@@ -51,10 +50,10 @@ export function Sidebar({ onOpenImport, onOpenSettings }: { onOpenImport?: () =>
   const _dbDocuments = useAppStore((s) => s._dbDocuments);
   const toggleChat = useAppStore((s) => s.toggleChat);
   const isChatOpen = useAppStore((s) => s.isChatOpen);
+  const addContextItem = useAppStore((s) => s.addContextItem);
   const renameFolder = useAppStore((s) => s.renameFolder);
   const moveFolderAction = useAppStore((s) => s.moveFolder);
   const saveDocument = useAppStore((s) => s.saveDocument);
-  const { user, signOut } = useAuth();
 
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -83,6 +82,39 @@ export function Sidebar({ onOpenImport, onOpenSettings }: { onOpenImport?: () =>
     id: string;
     name: string;
   } | null>(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      setIsCollapsed(localStorage.getItem("cortex:sidebarCollapsed") === "true");
+    } catch {
+      // localStorage unavailable
+    }
+  }, []);
+
+  const toggleCollapsed = useCallback(() => {
+    setIsCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("cortex:sidebarCollapsed", String(next));
+      } catch {
+        // localStorage unavailable
+      }
+      return next;
+    });
+  }, []);
+
+  const didAutoCollapseForChat = useRef(false);
+  useEffect(() => {
+    if (!isChatOpen || didAutoCollapseForChat.current) return;
+    didAutoCollapseForChat.current = true;
+    setIsCollapsed(true);
+    try {
+      localStorage.setItem("cortex:sidebarCollapsed", "true");
+    } catch {
+      // localStorage unavailable
+    }
+  }, [isChatOpen]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -355,33 +387,34 @@ export function Sidebar({ onOpenImport, onOpenSettings }: { onOpenImport?: () =>
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
-      <div className="w-[260px] shrink-0 h-full flex flex-col bg-sidebar-bg">
-        {/* Logo */}
-        <div className="px-4 py-3 flex items-center justify-between">
-          <img src="/book.svg" alt="Cortex" className="h-5 w-5 opacity-100" />
-          <div className="flex items-center gap-1">
+      <div className="shrink-0 h-full p-2">
+      <div
+        className={`h-full flex flex-col bg-sidebar-bg overflow-hidden rounded-md border border-border transition-[width] duration-200 ease-out ${
+          isCollapsed ? "w-10" : "w-[260px]"
+        }`}
+      >
+        {isCollapsed ? (
+          <div className="flex flex-col items-center py-3">
             <button
-              onClick={() => createDocument(null)}
+              onClick={toggleCollapsed}
               className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
-              title="New document"
+              title="Expand sidebar"
             >
-              <Plus size={14} />
-            </button>
-            <button
-              onClick={() => createDocument(null, "moodboard")}
-              className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
-              title="New moodboard"
-            >
-              <LayoutGrid size={14} />
-            </button>
-            <button
-              onClick={() => setIsCreatingFolder(true)}
-              className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
-              title="New folder"
-            >
-              <FolderIcon size={14} />
+              <ChevronRight size={16} />
             </button>
           </div>
+        ) : (
+          <>
+        {/* Logo */}
+        <div className="px-4 py-3 flex items-center justify-between">
+          <span className="text-[15px] font-bold leading-none text-foreground">Book</span>
+          <button
+            onClick={toggleCollapsed}
+            className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+            title="Collapse sidebar"
+          >
+            <ChevronLeft size={16} />
+          </button>
         </div>
 
         {/* File Tree */}
@@ -445,28 +478,6 @@ export function Sidebar({ onOpenImport, onOpenSettings }: { onOpenImport?: () =>
             {/* Divider between pinned items and the rest */}
             {(rootDocuments.some((d) => d.docType === "todo" || d.docType === "daily_parent" || d.docType === "quick_note_parent")) && (
               <div className="mx-2 my-1.5 border-t border-border/60" />
-            )}
-
-            {/* New folder input */}
-            {isCreatingFolder && (
-              <div className="px-3 py-1">
-                <input
-                  type="text"
-                  value={newFolderName}
-                  onChange={(e) => setNewFolderName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleCreateFolder();
-                    if (e.key === "Escape") setIsCreatingFolder(false);
-                  }}
-                  onBlur={() => {
-                    if (newFolderName.trim()) handleCreateFolder();
-                    else setIsCreatingFolder(false);
-                  }}
-                  autoFocus
-                  placeholder="Folder name"
-                  className="w-full text-xs bg-white border border-border rounded px-2 py-1 outline-none focus:border-black/30"
-                />
-              </div>
             )}
 
             {/* Folders */}
@@ -562,47 +573,73 @@ export function Sidebar({ onOpenImport, onOpenSettings }: { onOpenImport?: () =>
               />
             ))}
           </div>
-        </RootDropZone>
 
-        {/* Bottom actions */}
-        <div className="border-t border-border px-3 py-2 flex flex-col gap-1">
-          <button
-            onClick={toggleChat}
-            className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
-              isChatOpen
-                ? "bg-black/5 text-foreground"
-                : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
-            }`}
-          >
-            <MessageSquare size={14} />
-            AI Chat
-          </button>
-          <button
-            onClick={onOpenSettings}
-            className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
-          >
-            <Settings size={14} />
-            Settings
-          </button>
-          {onOpenImport && (
-            <button
-              onClick={onOpenImport}
-              className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
-            >
-              <Upload size={14} />
-              Import from Notion
-            </button>
+          {isCreatingFolder && (
+            <div className="px-3 py-1">
+              <input
+                type="text"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCreateFolder();
+                  if (e.key === "Escape") setIsCreatingFolder(false);
+                }}
+                onBlur={() => {
+                  if (newFolderName.trim()) handleCreateFolder();
+                  else setIsCreatingFolder(false);
+                }}
+                autoFocus
+                placeholder="Folder name"
+                className="w-full text-xs bg-white border border-border rounded px-2 py-1 outline-none focus:border-black/30"
+              />
+            </div>
           )}
-          {user && (
-            <button
-              onClick={signOut}
-              className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
-            >
-              <LogOut size={14} />
-              {user.user_metadata?.full_name || user.email || "Sign out"}
-            </button>
-          )}
-        </div>
+
+          {/* Create actions + Chat / Settings */}
+          <div className="flex items-center justify-between px-3 py-1.5">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => createDocument(null)}
+                className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                title="New document"
+              >
+                <Plus size={14} />
+              </button>
+              <button
+                onClick={() => createDocument(null, "moodboard")}
+                className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                title="New moodboard"
+              >
+                <LayoutGrid size={14} />
+              </button>
+              <button
+                onClick={() => setIsCreatingFolder(true)}
+                className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                title="New folder"
+              >
+                <FolderIcon size={14} />
+              </button>
+            </div>
+            <div className="flex items-center gap-1">
+              <IconTooltipButton
+                label="AI Chat"
+                onClick={toggleChat}
+                active={isChatOpen}
+              >
+                <MessageSquare size={14} />
+              </IconTooltipButton>
+              <IconTooltipButton
+                label="Settings"
+                onClick={onOpenSettings}
+              >
+                <Settings size={14} />
+              </IconTooltipButton>
+            </div>
+          </div>
+        </RootDropZone>
+          </>
+        )}
+      </div>
       </div>
 
       {/* Drag overlay — floating ghost while dragging */}
@@ -679,6 +716,29 @@ export function Sidebar({ onOpenImport, onOpenSettings }: { onOpenImport?: () =>
           <button
             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-black/5 transition-colors"
             onClick={() => {
+              if (contextMenu.type === "doc") {
+                addContextItem({
+                  type: "document",
+                  docId: contextMenu.id,
+                  title: contextMenu.name,
+                });
+              } else {
+                addContextItem({
+                  type: "folder",
+                  folderId: contextMenu.id,
+                  title: contextMenu.name,
+                });
+              }
+              if (!isChatOpen) toggleChat();
+              setContextMenu(null);
+            }}
+          >
+            <MessageSquarePlus size={12} />
+            Add to context
+          </button>
+          <button
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-black/5 transition-colors"
+            onClick={() => {
               setRenamingItem({ type: contextMenu.type, id: contextMenu.id, name: contextMenu.name });
               setContextMenu(null);
             }}
@@ -704,6 +764,39 @@ export function Sidebar({ onOpenImport, onOpenSettings }: { onOpenImport?: () =>
 }
 
 /* ---------- Root Drop Zone (moving docs out of folders) ---------- */
+
+function IconTooltipButton({
+  label,
+  onClick,
+  active,
+  children,
+}: {
+  label: string;
+  onClick?: () => void;
+  active?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className={`relative group p-1 rounded transition-colors ${
+        active
+          ? "bg-black/5 text-foreground"
+          : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+      }`}
+    >
+      {children}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full left-1/2 z-10 -translate-x-1/2 mb-1.5 px-1.5 py-0.5 rounded bg-neutral-800 text-white text-[10px] font-medium leading-none whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity"
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
 
 function RootDropZone({ children }: { children: React.ReactNode }) {
   const { isOver, setNodeRef } = useDroppable({ id: "root" });

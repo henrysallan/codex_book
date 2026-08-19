@@ -27,11 +27,7 @@ const MoodboardCanvas = dynamic(() => import("@/components/MoodboardCanvas").the
   ),
 });
 
-interface EditorPanelProps {
-  onOpenSearch?: () => void;
-}
-
-export function EditorPanel({ onOpenSearch }: EditorPanelProps) {
+export function EditorPanel() {
   const activeDocument = useAppStore((s) => s.activeDocument);
   const activeDocumentId = useAppStore((s) => s.activeDocumentId);
   const openTabs = useAppStore((s) => s.openTabs);
@@ -76,7 +72,7 @@ export function EditorPanel({ onOpenSearch }: EditorPanelProps) {
       </div>
 
       {/* Search bar at bottom */}
-      {!showDashboard && activeDocument?.docType !== "moodboard" && <SearchBar onOpenSearch={onOpenSearch} />}
+      {activeDocument?.docType !== "moodboard" && <SearchBar />}
     </div>
   );
 }

@@ -73,7 +73,7 @@ export function TabBar() {
   );
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 overflow-x-auto border-b border-border bg-white">
+    <div className="flex items-center gap-2 px-3 py-1.5 overflow-x-auto bg-white">
       {/* Back / Forward */}
       <div className="flex items-center gap-0.5 shrink-0 mr-1">
         <button
@@ -113,7 +113,7 @@ export function TabBar() {
             key={tab.documentId}
             className={`flex items-center gap-1.5 px-3 py-1 rounded-full border cursor-pointer transition-colors shrink-0 ${
               isActive
-                ? "border-black/20 bg-white"
+                ? "border-black/20 bg-black/[0.08]"
                 : "border-border hover:border-black/15 bg-transparent"
             }`}
             onClick={() => {

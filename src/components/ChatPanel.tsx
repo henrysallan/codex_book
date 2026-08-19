@@ -7,6 +7,7 @@ import {
   ChevronDown,
   X,
   FileText,
+  FolderIcon,
   Plus,
   TextQuote,
   Loader2,
@@ -93,6 +94,7 @@ export function ChatPanel() {
   const clearContextItems = useAppStore((s) => s.clearContextItems);
   const initialize = useAppStore((s) => s.initialize);
   const _dbDocuments = useAppStore((s) => s._dbDocuments);
+  const _dbFolders = useAppStore((s) => s._dbFolders);
   const [input, setInput] = useState("");
   const [model, setModel] = useState("Auto");
   const [showModelPicker, setShowModelPicker] = useState(false);
@@ -162,18 +164,45 @@ export function ChatPanel() {
       try {
         // Resolve document context items to include their content from the store
         // so the server doesn't need to re-fetch from DB (avoids RLS issues)
-        const resolvedContextItems = contextItems.map((ci) => {
-          if (ci.type === "document" && ci.docId) {
-            // Check active document first, then the cache
-            if (activeDocument && activeDocument.id === ci.docId) {
-              return { ...ci, content: activeDocument.content };
-            }
-            const cached = _dbDocuments.find((d) => d.id === ci.docId);
-            if (cached?.content) {
-              return { ...ci, content: cached.content };
+        const resolveDoc = (docId: string, title: string) => {
+          if (activeDocument && activeDocument.id === docId) {
+            return { type: "document" as const, docId, title, content: activeDocument.content };
+          }
+          const cached = _dbDocuments.find((d) => d.id === docId);
+          return {
+            type: "document" as const,
+            docId,
+            title,
+            content: cached?.content,
+          };
+        };
+
+        const folderDescendants = (folderId: string) => {
+          const ids = new Set<string>([folderId]);
+          let grew = true;
+          while (grew) {
+            grew = false;
+            for (const f of _dbFolders) {
+              if (f.parent_id && ids.has(f.parent_id) && !ids.has(f.id)) {
+                ids.add(f.id);
+                grew = true;
+              }
             }
           }
-          return ci;
+          return ids;
+        };
+
+        const resolvedContextItems = contextItems.flatMap((ci) => {
+          if (ci.type === "folder") {
+            const folderIds = folderDescendants(ci.folderId);
+            return _dbDocuments
+              .filter((d) => d.folder_id && folderIds.has(d.folder_id))
+              .map((d) => resolveDoc(d.id, d.title || "Untitled"));
+          }
+          if (ci.type === "document" && ci.docId) {
+            return [resolveDoc(ci.docId, ci.title)];
+          }
+          return [ci];
         });
 
         const requestBody = {
@@ -268,7 +297,7 @@ export function ChatPanel() {
         abortRef.current = null;
       }
     },
-    [isStreaming, chatMessages, activeDocument, contextItems, addChatMessage, initialize]
+    [isStreaming, chatMessages, activeDocument, contextItems, addChatMessage, initialize, _dbDocuments, _dbFolders]
   );
 
   const handleSend = () => {
@@ -432,22 +461,30 @@ export function ChatPanel() {
         {/* Context chips bar */}
         {(contextItems.length > 0 || activeDocument) && (
           <div className="flex items-center gap-1.5 flex-wrap mb-2">
-            {contextItems.map((item, i) => (
+            {contextItems.map((item) => (
               <span
                 key={
                   item.type === "document"
                     ? `doc-${item.docId}`
+                    : item.type === "folder"
+                    ? `folder-${item.folderId}`
                     : `blk-${item.blockId}`
                 }
                 className="inline-flex items-center gap-1 pl-1.5 pr-1 py-0.5 rounded-md border border-border bg-black/[0.03] text-[11px] text-foreground max-w-[180px] group"
               >
                 {item.type === "document" ? (
                   <FileText size={11} className="shrink-0 text-muted-foreground" />
+                ) : item.type === "folder" ? (
+                  <FolderIcon size={11} className="shrink-0 text-muted-foreground" />
                 ) : (
                   <TextQuote size={11} className="shrink-0 text-muted-foreground" />
                 )}
                 <span className="truncate">
-                  {item.type === "document" ? item.title : item.text}
+                  {item.type === "document"
+                    ? item.title
+                    : item.type === "folder"
+                    ? item.title
+                    : item.text}
                 </span>
                 <button
                   onClick={() => removeContextItem(item)}

@@ -739,6 +739,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           return ci.docId === item.docId;
         if (ci.type === "block" && item.type === "block")
           return ci.blockId === item.blockId;
+        if (ci.type === "folder" && item.type === "folder")
+          return ci.folderId === item.folderId;
         return false;
       });
       if (exists) return s;
@@ -753,6 +755,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           return ci.docId !== item.docId;
         if (ci.type === "block" && item.type === "block")
           return ci.blockId !== item.blockId;
+        if (ci.type === "folder" && item.type === "folder")
+          return ci.folderId !== item.folderId;
         return true;
       }),
     }));

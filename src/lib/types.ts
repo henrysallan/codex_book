@@ -127,7 +127,8 @@ export interface Backlink {
 // Context items for AI chat
 export type ContextItem =
   | { type: "document"; docId: string; title: string }
-  | { type: "block"; blockId: string; text: string; docTitle: string };
+  | { type: "block"; blockId: string; text: string; docTitle: string }
+  | { type: "folder"; folderId: string; title: string };
 
 // Search
 export interface SearchResult {

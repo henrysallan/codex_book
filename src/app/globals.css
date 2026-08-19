@@ -34,8 +34,11 @@ body {
 }
 
 /* BlockNote editor overrides */
-.bn-editor {
+.bn-container .bn-editor {
   font-family: var(--font-inter), "Inter", -apple-system, BlinkMacSystemFont, sans-serif !important;
+  padding-inline: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
 }
 
 .bn-editor .bn-default-styles,

@@ -8,9 +8,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { EditorPanel } from "@/components/EditorPanel";
 import { ChatPanel } from "@/components/ChatPanel";
 import { CommandPalette } from "@/components/CommandPalette";
-import { SearchDialog } from "@/components/SearchDialog";
 import { LoginScreen } from "@/components/LoginScreen";
-import { NotionImport } from "@/components/NotionImport";
 import { SettingsModal } from "@/components/SettingsModal";
 
 export default function Home() {
@@ -20,8 +18,6 @@ export default function Home() {
   const isChatOpen = useAppStore((s) => s.isChatOpen);
 
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [isImportOpen, setIsImportOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [chatWidth, setChatWidth] = useState(320);
   const isResizing = useRef(false);
@@ -70,11 +66,6 @@ export default function Home() {
         e.preventDefault();
         setIsCommandPaletteOpen(true);
       }
-      // Cmd+Shift+F / Ctrl+Shift+F => full-text search
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "f") {
-        e.preventDefault();
-        setIsSearchOpen(true);
-      }
     },
     []
   );
@@ -109,33 +100,32 @@ export default function Home() {
   return (
     <div className="h-screen w-screen flex overflow-hidden bg-white">
       {/* Left Panel - File Tree */}
-      <Sidebar onOpenImport={() => setIsImportOpen(true)} onOpenSettings={() => setIsSettingsOpen(true)} />
+      <Sidebar onOpenSettings={() => setIsSettingsOpen(true)} />
 
       {/* Center Panel - Editor */}
-      <div className="flex-1 min-w-0 flex flex-col border-l border-border">
-        <EditorPanel onOpenSearch={() => setIsSearchOpen(true)} />
+      <div className="flex-1 min-w-0 flex flex-col">
+        <EditorPanel />
       </div>
 
-      {/* Resize handle + Right Panel - AI Chat */}
-      {isChatOpen && (
-        <div
-          onMouseDown={startResize}
-          className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-black/10 active:bg-black/15 transition-colors"
-        />
-      )}
+      {/* Right Panel - AI Chat */}
       <div
-        className="shrink-0 border-l border-border overflow-hidden"
+        className="shrink-0 h-full overflow-hidden relative"
         style={{
-          width: isChatOpen ? `${chatWidth}px` : '0px',
+          width: isChatOpen ? `${chatWidth + 16}px` : "0px",
           opacity: isChatOpen ? 1 : 0,
-          borderLeftWidth: isChatOpen ? '1px' : '0px',
           transition: isResizing.current
-            ? 'none'
-            : 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease-out, border-left-width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+            ? "none"
+            : "width 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease-out",
         }}
       >
-        <div style={{ width: `${chatWidth}px` }} className="h-full">
-          <ChatPanel />
+        <div
+          onMouseDown={startResize}
+          className="absolute left-0 top-0 bottom-0 w-2 cursor-col-resize z-10"
+        />
+        <div className="h-full p-2" style={{ width: `${chatWidth + 16}px` }}>
+          <div className="h-full rounded-md border border-border bg-white overflow-hidden">
+            <ChatPanel />
+          </div>
         </div>
       </div>
 
@@ -143,14 +133,6 @@ export default function Home() {
       <CommandPalette
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
-      />
-      <SearchDialog
-        isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-      />
-      <NotionImport
-        isOpen={isImportOpen}
-        onClose={() => setIsImportOpen(false)}
       />
       <SettingsModal
         isOpen={isSettingsOpen}

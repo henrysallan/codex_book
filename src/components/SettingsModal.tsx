@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { X, Loader2, BarChart3, DollarSign, Zap, Clock } from "lucide-react";
+import { X, Loader2, BarChart3, DollarSign, Zap, Clock, LogOut } from "lucide-react";
+import { useAuth } from "@/lib/auth";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -63,6 +64,7 @@ function formatCost(usd: number): string {
 }
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
+  const { user, signOut } = useAuth();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -390,6 +392,29 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               </>
             )}
           </div>
+
+          {user && (
+            <div className="pt-5 border-t border-border">
+              <h3 className="text-sm font-semibold text-foreground mb-3">Account</h3>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm text-foreground truncate">
+                    {user.user_metadata?.full_name || "Signed in"}
+                  </div>
+                  {user.email && (
+                    <div className="text-xs text-muted-foreground truncate">{user.email}</div>
+                  )}
+                </div>
+                <button
+                  onClick={signOut}
+                  className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-black/5 transition-colors"
+                >
+                  <LogOut size={13} />
+                  Log out
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
