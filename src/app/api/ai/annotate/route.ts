@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { logUsage } from "@/lib/ai/usage";
 import { embedText } from "@/lib/ai/embed";
+import { requireUserForAI } from "@/lib/serverAuth";
 import {
   getServerSupabase,
   isServerSupabaseConfigured,
@@ -164,6 +165,12 @@ async function embedAnnotation(
  * Streams an AI response about highlighted text using Anthropic Haiku 3.5.
  */
 export async function POST(req: NextRequest) {
+  // These routes run with the service-role key and spend real LLM credits.
+  // Requires Authorization: Bearer <supabase access token> — the web client
+  // attaches it via authedFetch, trac3 via its Supabase session.
+  const auth = await requireUserForAI(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const body = await req.json();
     const {

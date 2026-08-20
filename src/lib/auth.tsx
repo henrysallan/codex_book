@@ -75,7 +75,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       provider: "google",
       options: {
         redirectTo: `${window.location.origin}/`,
-        scopes: "https://www.googleapis.com/auth/drive.readonly",
+        // Both scopes are requested here so one consent covers the web Drive
+        // browser and trac3's Google Calendar writes. Google only grants new
+        // scopes on fresh consent, so adding one requires signing out and back in.
+        scopes: [
+          "https://www.googleapis.com/auth/drive.readonly",
+          "https://www.googleapis.com/auth/calendar.events",
+        ].join(" "),
         queryParams: { access_type: "offline", prompt: "consent" },
       },
     });

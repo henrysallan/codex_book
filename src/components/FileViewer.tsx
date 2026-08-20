@@ -15,6 +15,7 @@ import { HIGHLIGHT_COLORS, PdfSelectionMenu } from "./PdfSelectionMenu";
 import { PdfAnnotationPopover } from "./PdfAnnotationPopover";
 import { useAuth } from "@/lib/auth";
 import type { PdfAnnotation, PdfAnnotationColor, PdfAnnotationType, AnnotationMessage } from "@/lib/types";
+import { authedFetch } from "@/lib/apiFetch";
 import {
   Loader2,
   Download,
@@ -381,7 +382,7 @@ export function FileViewer({ fileId, fileName, mimeType, webViewLink }: FileView
 
       // Call AI endpoint
       try {
-        const res = await fetch("/api/ai/annotate", {
+        const res = await authedFetch("/api/ai/annotate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

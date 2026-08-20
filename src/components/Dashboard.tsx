@@ -33,7 +33,7 @@ export function Dashboard() {
   return (
     <div className="h-full flex flex-col">
       {/* Three-column body */}
-      <div className="flex-1 min-h-0 flex gap-2 p-2">
+      <div className="flex-1 min-h-0 flex gap-2 pt-2 pr-2 pb-2">
         {/* Left — Quick Notes + Todo stacked */}
         <div className="w-72 shrink-0 flex flex-col gap-2">
           <div className="rounded-md border border-border bg-white overflow-hidden flex flex-col max-h-[50%]">

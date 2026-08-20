@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { indexDocument } from "@/lib/ai/indexDocument";
+import { requireUserForAI } from "@/lib/serverAuth";
 import {
   getServerSupabase,
   isServerSupabaseConfigured,
@@ -20,6 +21,12 @@ export const maxDuration = 300; // 5 minutes — backfill can be slow
  *   - limit: number  — max documents to process (default all)
  */
 export async function POST(req: NextRequest) {
+  // These routes run with the service-role key and spend real LLM credits.
+  // Requires Authorization: Bearer <supabase access token> — the web client
+  // attaches it via authedFetch, trac3 via its Supabase session.
+  const auth = await requireUserForAI(req);
+  if (auth instanceof NextResponse) return auth;
+
   if (!isServerSupabaseConfigured()) {
     return NextResponse.json(
       { error: "Server Supabase not configured" },

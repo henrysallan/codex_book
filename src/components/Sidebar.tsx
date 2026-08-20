@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useAppStore } from "@/lib/store";
 import { Folder, DocumentMeta, DocType } from "@/lib/types";
 import {
@@ -48,6 +49,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const moveDocument = useAppStore((s) => s.moveDocument);
   const setParentDocument = useAppStore((s) => s.setParentDocument);
   const _dbDocuments = useAppStore((s) => s._dbDocuments);
+  const _dbFolders = useAppStore((s) => s._dbFolders);
   const toggleChat = useAppStore((s) => s.toggleChat);
   const isChatOpen = useAppStore((s) => s.isChatOpen);
   const addContextItem = useAppStore((s) => s.addContextItem);
@@ -83,6 +85,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
     name: string;
   } | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [focusedFolderId, setFocusedFolderId] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -103,6 +106,88 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
       return next;
     });
   }, []);
+
+  const expandSidebar = useCallback(() => {
+    setIsCollapsed(false);
+    try {
+      localStorage.setItem("cortex:sidebarCollapsed", "false");
+    } catch {
+      // localStorage unavailable
+    }
+  }, []);
+
+  const startCreateFolder = useCallback(() => {
+    expandSidebar();
+    setIsCreatingFolder(true);
+  }, [expandSidebar]);
+
+  const enterFolder = useCallback((folderId: string) => {
+    setFocusedFolderId(folderId);
+  }, []);
+
+  const focusedFolder = useMemo(() => {
+    if (!focusedFolderId) return null;
+
+    const findInFolderList = (list: Folder[]): Folder | null => {
+      for (const f of list) {
+        if (f.id === focusedFolderId) return f;
+        const child = findInFolderList(f.children);
+        if (child) return child;
+      }
+      return null;
+    };
+
+    const inTree = findInFolderList(folders);
+    if (inTree) return inTree;
+
+    const findInDocs = (docs: DocumentMeta[]): Folder | null => {
+      for (const doc of docs) {
+        if (doc.childFolders) {
+          for (const childFolder of doc.childFolders) {
+            if (childFolder.id === focusedFolderId) return childFolder;
+            const nested = findInFolderList([childFolder]);
+            if (nested) return nested;
+          }
+        }
+        if (doc.childDocuments) {
+          const found = findInDocs(doc.childDocuments);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    return findInDocs(rootDocuments) ?? null;
+  }, [focusedFolderId, folders, rootDocuments]);
+
+  const focusedFolderPath = useMemo(() => {
+    if (!focusedFolderId) return [];
+    const path: { id: string; name: string }[] = [];
+    const folderMap = new Map(_dbFolders.map((f) => [f.id, f]));
+    let currentId: string | null = focusedFolderId;
+    while (currentId) {
+      const folder = folderMap.get(currentId);
+      if (!folder) break;
+      path.unshift({ id: folder.id, name: folder.name });
+      currentId = folder.parent_id;
+    }
+    return path;
+  }, [focusedFolderId, _dbFolders]);
+
+  useEffect(() => {
+    if (!focusedFolderId) return;
+    if (!_dbFolders.some((f) => f.id === focusedFolderId)) {
+      setFocusedFolderId(null);
+    }
+  }, [focusedFolderId, _dbFolders]);
+
+  const createDocumentInContext = useCallback(
+    (docType: DocType = "note") => {
+      if (focusedFolderId) return createDocument(focusedFolderId, docType);
+      return createDocument(null, docType);
+    },
+    [focusedFolderId, createDocument]
+  );
 
   const didAutoCollapseForChat = useRef(false);
   useEffect(() => {
@@ -160,16 +245,20 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
       .filter((d) => d.docType === "todo" || d.docType === "daily_parent" || d.docType === "quick_note_parent")
       .forEach(walkDoc);
 
-    // Folders
-    folders.forEach(walkFolder);
+    // Folders + root docs (or focused folder contents)
+    if (focusedFolderId && focusedFolder) {
+      focusedFolder.children.forEach((f) => items.push(`folder:${f.id}`));
+      focusedFolder.documents.forEach(walkDoc);
+    } else {
+      folders.forEach(walkFolder);
 
-    // Root docs (non-pinned)
-    rootDocuments
-      .filter((d) => d.docType !== "todo" && d.docType !== "daily_parent" && d.docType !== "quick_note_parent")
-      .forEach(walkDoc);
+      rootDocuments
+        .filter((d) => d.docType !== "todo" && d.docType !== "daily_parent" && d.docType !== "quick_note_parent")
+        .forEach(walkDoc);
+    }
 
     return items;
-  }, [folders, rootDocuments, expandedDocIds]);
+  }, [folders, rootDocuments, expandedDocIds, focusedFolderId, focusedFolder]);
 
   /**
    * Unified click handler for sidebar items.
@@ -240,7 +329,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
 
   const handleCreateFolder = async () => {
     if (newFolderName.trim()) {
-      await createFolder(newFolderName.trim());
+      await createFolder(newFolderName.trim(), focusedFolderId ?? null);
       setNewFolderName("");
       setIsCreatingFolder(false);
     }
@@ -394,7 +483,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
         }`}
       >
         {isCollapsed ? (
-          <div className="flex flex-col items-center py-3">
+          <div className="flex flex-col h-full items-center py-3">
             <button
               onClick={toggleCollapsed}
               className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
@@ -402,19 +491,57 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
             >
               <ChevronRight size={16} />
             </button>
+            <div className="flex flex-col items-center gap-1 mt-2">
+              <IconTooltipButton
+                label="New document"
+                onClick={() => createDocumentInContext()}
+              >
+                <Plus size={14} />
+              </IconTooltipButton>
+              <IconTooltipButton
+                label="New moodboard"
+                onClick={() => createDocumentInContext("moodboard")}
+              >
+                <LayoutGrid size={14} />
+              </IconTooltipButton>
+              <IconTooltipButton
+                label="New folder"
+                onClick={startCreateFolder}
+              >
+                <FolderIcon size={14} />
+              </IconTooltipButton>
+            </div>
+            <div className="flex-1" />
+            <div className="flex flex-col items-center gap-1">
+              <IconTooltipButton
+                label="AI Chat"
+                onClick={toggleChat}
+                active={isChatOpen}
+              >
+                <MessageSquare size={14} />
+              </IconTooltipButton>
+              <IconTooltipButton
+                label="Settings"
+                onClick={onOpenSettings}
+              >
+                <Settings size={14} />
+              </IconTooltipButton>
+            </div>
           </div>
         ) : (
           <>
         {/* Logo */}
-        <div className="px-4 py-3 flex items-center justify-between">
-          <span className="text-[15px] font-bold leading-none text-foreground">Book</span>
-          <button
-            onClick={toggleCollapsed}
-            className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
-            title="Collapse sidebar"
-          >
-            <ChevronLeft size={16} />
-          </button>
+        <div className="px-2 pt-2 pb-1">
+          <div className="flex items-center justify-between gap-2 rounded-md bg-black/[0.06] px-2.5 py-1.5">
+            <span className="text-[15px] font-bold leading-none text-foreground">Book</span>
+            <button
+              onClick={toggleCollapsed}
+              className="p-0.5 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors shrink-0"
+              title="Collapse sidebar"
+            >
+              <ChevronLeft size={15} />
+            </button>
+          </div>
         </div>
 
         {/* File Tree */}
@@ -469,6 +596,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
                 }}
                 selectedIds={selectedIds}
                 onItemClick={handleItemClick}
+                onEnterFolder={enterFolder}
               />
             ))}
 
@@ -480,6 +608,106 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
               <div className="mx-2 my-1.5 border-t border-border/60" />
             )}
 
+            <SidebarFolderBreadcrumb
+              path={focusedFolderPath}
+              onNavigate={setFocusedFolderId}
+            />
+
+            {focusedFolderId && focusedFolder ? (
+              <>
+                {focusedFolder.children.map((folder) => (
+                  <FolderItem
+                    key={folder.id}
+                    folder={folder}
+                    depth={0}
+                    flatList
+                    activeDocumentId={activeDocumentId}
+                    onToggle={toggleFolder}
+                    onOpenDoc={openDocument}
+                    onCreateDoc={createDocument}
+                    onDeleteDoc={requestDeleteDoc}
+                    onDeleteFolder={requestDeleteFolder}
+                    onContextMenu={(e, id, name) => {
+                      e.preventDefault();
+                      setContextMenu({ x: e.clientX, y: e.clientY, type: "folder", id, name });
+                    }}
+                    onContextMenuDoc={(e, id, name) => {
+                      e.preventDefault();
+                      setContextMenu({ x: e.clientX, y: e.clientY, type: "doc", id, name });
+                    }}
+                    renamingItem={renamingItem}
+                    onRenameSubmit={async (type, id, newName) => {
+                      if (type === "folder") await renameFolder(id, newName);
+                      else await saveDocument(id, { title: newName });
+                      setRenamingItem(null);
+                    }}
+                    onRenameCancel={() => setRenamingItem(null)}
+                    expandedDocIds={expandedDocIds}
+                    onToggleDoc={(id: string) => {
+                      setExpandedDocIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(id)) next.delete(id);
+                        else next.add(id);
+                        return next;
+                      });
+                    }}
+                    selectedIds={selectedIds}
+                    onItemClick={handleItemClick}
+                    onEnterFolder={enterFolder}
+                  />
+                ))}
+                {focusedFolder.documents.map((doc) => (
+                  <DraggableDocItem
+                    key={doc.id}
+                    doc={doc}
+                    depth={0}
+                    isActive={activeDocumentId === doc.id}
+                    onOpen={openDocument}
+                    onDelete={requestDeleteDoc}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setContextMenu({ x: e.clientX, y: e.clientY, type: "doc", id: doc.id, name: doc.title || "Untitled" });
+                    }}
+                    renamingItem={renamingItem}
+                    onRenameSubmit={async (newName) => {
+                      await saveDocument(doc.id, { title: newName });
+                      setRenamingItem(null);
+                    }}
+                    onRenameCancel={() => setRenamingItem(null)}
+                    expandedDocIds={expandedDocIds}
+                    onToggleDoc={(id) => {
+                      setExpandedDocIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(id)) next.delete(id);
+                        else next.add(id);
+                        return next;
+                      });
+                    }}
+                    activeDocumentId={activeDocumentId}
+                    onToggleFolder={toggleFolder}
+                    onCreateDoc={createDocument}
+                    onDeleteFolder={requestDeleteFolder}
+                    onContextMenuFolder={(e, id, name) => {
+                      e.preventDefault();
+                      setContextMenu({ x: e.clientX, y: e.clientY, type: "folder", id, name });
+                    }}
+                    onContextMenuDoc={(e, id, name) => {
+                      e.preventDefault();
+                      setContextMenu({ x: e.clientX, y: e.clientY, type: "doc", id, name });
+                    }}
+                    onRenameSubmitFolder={async (type, id, newName) => {
+                      if (type === "folder") await renameFolder(id, newName);
+                      else await saveDocument(id, { title: newName });
+                      setRenamingItem(null);
+                    }}
+                    selectedIds={selectedIds}
+                    onItemClick={handleItemClick}
+                    onEnterFolder={enterFolder}
+                  />
+                ))}
+              </>
+            ) : (
+              <>
             {/* Folders */}
             {folders.map((folder) => (
               <FolderItem
@@ -518,6 +746,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
                 }}
                 selectedIds={selectedIds}
                 onItemClick={handleItemClick}
+                onEnterFolder={enterFolder}
               />
             ))}
 
@@ -570,8 +799,11 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
                 }}
                 selectedIds={selectedIds}
                 onItemClick={handleItemClick}
+                onEnterFolder={enterFolder}
               />
             ))}
+              </>
+            )}
           </div>
 
           {isCreatingFolder && (
@@ -599,14 +831,14 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
           <div className="flex items-center justify-between px-3 py-1.5">
             <div className="flex items-center gap-1">
               <button
-                onClick={() => createDocument(null)}
+                onClick={() => createDocumentInContext()}
                 className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
                 title="New document"
               >
                 <Plus size={14} />
               </button>
               <button
-                onClick={() => createDocument(null, "moodboard")}
+                onClick={() => createDocumentInContext("moodboard")}
                 className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
                 title="New moodboard"
               >
@@ -776,25 +1008,117 @@ function IconTooltipButton({
   active?: boolean;
   children: React.ReactNode;
 }) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState({ top: 0, left: 0 });
+
+  const updateTooltipPos = useCallback(() => {
+    const el = buttonRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setTooltipPos({
+      top: rect.top - 6,
+      left: rect.left + rect.width / 2,
+    });
+  }, []);
+
+  const show = useCallback(() => {
+    updateTooltipPos();
+    setShowTooltip(true);
+  }, [updateTooltipPos]);
+
+  const hide = useCallback(() => setShowTooltip(false), []);
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      className={`relative group p-1 rounded transition-colors ${
-        active
-          ? "bg-black/5 text-foreground"
-          : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
-      }`}
-    >
-      {children}
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute bottom-full left-1/2 z-10 -translate-x-1/2 mb-1.5 px-1.5 py-0.5 rounded bg-neutral-800 text-white text-[10px] font-medium leading-none whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity"
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={onClick}
+        aria-label={label}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        className={`relative p-1 rounded transition-colors ${
+          active
+            ? "bg-black/5 text-foreground"
+            : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+        }`}
       >
-        {label}
-      </span>
-    </button>
+        {children}
+      </button>
+      {showTooltip &&
+        createPortal(
+          <span
+            role="tooltip"
+            style={{
+              position: "fixed",
+              top: tooltipPos.top,
+              left: tooltipPos.left,
+              transform: "translate(-50%, -100%)",
+            }}
+            className="pointer-events-none z-[9999] px-1.5 py-0.5 rounded bg-neutral-800 text-white text-[10px] font-medium leading-none whitespace-nowrap"
+          >
+            {label}
+          </span>,
+          document.body
+        )}
+    </>
+  );
+}
+
+function SidebarFolderBreadcrumb({
+  path,
+  onNavigate,
+}: {
+  path: { id: string; name: string }[];
+  onNavigate: (folderId: string | null) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [path]);
+
+  const isAtRoot = path.length === 0;
+
+  return (
+    <div
+      ref={scrollRef}
+      className="mx-2 mb-1.5 min-w-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+    >
+      <div className="flex items-center gap-1 whitespace-nowrap text-xs font-medium">
+        <button
+          type="button"
+          onClick={() => onNavigate(null)}
+          className={`shrink-0 transition-colors ${
+            isAtRoot
+              ? "text-foreground font-semibold"
+              : "text-muted-foreground hover:text-foreground font-medium"
+          }`}
+        >
+          root
+        </button>
+        {path.map((segment, index) => (
+          <span key={segment.id} className="flex items-center gap-1">
+            <span className="text-muted-foreground shrink-0">›</span>
+            <button
+              type="button"
+              onClick={() => onNavigate(segment.id)}
+              className={`shrink-0 max-w-[140px] truncate transition-colors ${
+                index === path.length - 1
+                  ? "text-foreground font-semibold"
+                  : "text-muted-foreground hover:text-foreground font-medium"
+              }`}
+            >
+              {segment.name}
+            </button>
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -818,6 +1142,7 @@ function RootDropZone({ children }: { children: React.ReactNode }) {
 function FolderItem({
   folder,
   depth,
+  flatList,
   activeDocumentId,
   onToggle,
   onOpenDoc,
@@ -833,9 +1158,11 @@ function FolderItem({
   onToggleDoc,
   selectedIds,
   onItemClick,
+  onEnterFolder,
 }: {
   folder: Folder;
   depth: number;
+  flatList?: boolean;
   activeDocumentId: string | null;
   onToggle: (id: string) => void;
   onOpenDoc: (id: string) => void;
@@ -851,6 +1178,7 @@ function FolderItem({
   onToggleDoc: (id: string) => void;
   selectedIds: Set<string>;
   onItemClick: (type: "doc" | "folder", id: string, e: React.MouseEvent) => boolean;
+  onEnterFolder?: (folderId: string) => void;
 }) {
   const [hovering, setHovering] = useState(false);
   const { isOver, setNodeRef: setDropRef } = useDroppable({ id: `folder-drop-${folder.id}` });
@@ -895,24 +1223,31 @@ function FolderItem({
         onClick={(e) => {
           if (isRenaming) return;
           const consumed = onItemClick("folder", folder.id, e);
-          if (!consumed) onToggle(folder.id);
+          if (!consumed && !flatList) onToggle(folder.id);
+        }}
+        onDoubleClick={(e) => {
+          if (isRenaming || !onEnterFolder) return;
+          e.stopPropagation();
+          onEnterFolder(folder.id);
         }}
         onContextMenu={(e) => onContextMenu(e, folder.id, folder.name)}
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}
       >
         <span className="text-muted-foreground shrink-0">
-          {folder.isExpanded ? (
+          {flatList ? (
+            <ChevronRight size={12} />
+          ) : folder.isExpanded ? (
             <ChevronDown size={12} />
           ) : (
             <ChevronRight size={12} />
           )}
         </span>
         <span className="text-muted-foreground shrink-0">
-          {folder.isExpanded ? (
-            <FolderOpen size={13} />
-          ) : (
+          {flatList || !folder.isExpanded ? (
             <FolderIcon size={13} />
+          ) : (
+            <FolderOpen size={13} />
           )}
         </span>
         {isRenaming ? (
@@ -969,7 +1304,7 @@ function FolderItem({
         )}
       </div>
 
-      {folder.isExpanded && (
+      {folder.isExpanded && !flatList && (
         <div>
           {folder.children.map((child) => (
             <FolderItem
@@ -991,6 +1326,7 @@ function FolderItem({
               onToggleDoc={onToggleDoc}
               selectedIds={selectedIds}
               onItemClick={onItemClick}
+              onEnterFolder={onEnterFolder}
             />
           ))}
           {folder.documents.map((doc) => (
@@ -1016,6 +1352,7 @@ function FolderItem({
               onRenameSubmitFolder={onRenameSubmit}
               selectedIds={selectedIds}
               onItemClick={onItemClick}
+              onEnterFolder={onEnterFolder}
             />
           ))}
         </div>
@@ -1049,6 +1386,7 @@ function DraggableDocItem({
   // Multi-select props
   selectedIds,
   onItemClick,
+  onEnterFolder,
 }: {
   doc: DocumentMeta;
   depth: number;
@@ -1072,6 +1410,7 @@ function DraggableDocItem({
   // Multi-select props
   selectedIds?: Set<string>;
   onItemClick?: (type: "doc" | "folder", id: string, e: React.MouseEvent) => boolean;
+  onEnterFolder?: (folderId: string) => void;
 }) {
   const [hovering, setHovering] = useState(false);
   const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
@@ -1222,6 +1561,7 @@ function DraggableDocItem({
               onToggleDoc={onToggleDoc}
               selectedIds={selectedIds ?? new Set()}
               onItemClick={onItemClick ?? (() => false)}
+              onEnterFolder={onEnterFolder}
             />
           ))}
           {/* Child documents */}
@@ -1251,6 +1591,7 @@ function DraggableDocItem({
               onRenameSubmitFolder={onRenameSubmitFolder}
               selectedIds={selectedIds}
               onItemClick={onItemClick}
+              onEnterFolder={onEnterFolder}
             />
           ))}
         </div>

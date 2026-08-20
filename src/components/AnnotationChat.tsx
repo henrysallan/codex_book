@@ -5,6 +5,7 @@ import { useAppStore } from "@/lib/store";
 import { X, MessageSquare, Trash2, Loader2 } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 
+import { authedFetch } from "@/lib/apiFetch";
 export function AnnotationChat() {
   const activeAnnotation = useAppStore((s) => s.activeAnnotation);
   const closeAnnotationChat = useAppStore((s) => s.closeAnnotationChat);
@@ -46,7 +47,7 @@ export function AnnotationChat() {
     abortRef.current = controller;
 
     try {
-      const res = await fetch("/api/ai/annotate", {
+      const res = await authedFetch("/api/ai/annotate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

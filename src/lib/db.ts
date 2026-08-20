@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from "./supabase";
+import { localDateTag, dateTagsForLookup, dayContainerTitle } from "./dateTag";
 import { DbDocument, DbFolder, Document, DocumentMeta, Folder, SearchResult, Backlink, DbBacklink, DbAnnotation, AnnotationMessage, DbAttachment, Attachment, DbPdfAnnotation, PdfAnnotation, PdfAnnotationColor, PdfAnnotationType, TextAnchor } from "./types";
 import { v4 as uuidv4 } from "uuid";
 
@@ -1481,12 +1482,15 @@ export async function ensureTodayDailyDocument(): Promise<DbDocument> {
     month: "long",
     day: "numeric",
   });
-  const dateTag = today.toISOString().slice(0, 10); // "2026-03-13"
+  // Local, so the tag agrees with the title above. Lookups also accept the
+  // legacy UTC tag — see src/lib/dateTag.ts.
+  const dateTag = localDateTag(today);
+  const lookupTags = dateTagsForLookup(today);
 
   if (!isSupabaseConfigured()) {
     const docs = getLocalDocuments();
     const existing = docs.find(
-      (d) => d.doc_type === "daily" && d.tags.includes(dateTag)
+      (d) => d.doc_type === "daily" && d.tags.some((t) => lookupTags.includes(t))
     );
     if (existing) return existing;
 
@@ -1513,16 +1517,17 @@ export async function ensureTodayDailyDocument(): Promise<DbDocument> {
   }
 
   // Supabase path
-  const { data, error } = await supabase!
+  const { data: dailyMatches, error } = await supabase!
     .from("documents")
     .select("*")
     .eq("doc_type", "daily")
-    .contains("tags", [dateTag])
-    .limit(1)
-    .maybeSingle();
+    .overlaps("tags", lookupTags);
 
   if (error) throw error;
-  if (data) return data;
+  // Prefer the locally-tagged container when both exist.
+  const daily =
+    dailyMatches?.find((d) => d.tags?.includes(dateTag)) ?? dailyMatches?.[0];
+  if (daily) return daily;
 
   const placeholderContent = JSON.stringify([
     {
@@ -1843,13 +1848,9 @@ export async function ensureQuickNoteParentDocument(): Promise<DbDocument> {
 export async function ensureTodayQuickNoteContainer(): Promise<DbDocument> {
   const parent = await ensureQuickNoteParentDocument();
   const today = new Date();
-  const dateTag = today.toISOString().slice(0, 10); // "2026-03-13"
-  const dateStr = today.toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  const dateTag = localDateTag(today);
+  const lookupTags = dateTagsForLookup(today);
+  const dateStr = dayContainerTitle(today);
 
   if (!isSupabaseConfigured()) {
     const docs = getLocalDocuments();
@@ -1857,7 +1858,7 @@ export async function ensureTodayQuickNoteContainer(): Promise<DbDocument> {
       (d) =>
         d.parent_document_id === parent.id &&
         d.doc_type === "note" &&
-        d.tags.includes(dateTag)
+        d.tags.some((t) => lookupTags.includes(t))
     );
     if (existing) return existing;
 
@@ -1874,16 +1875,16 @@ export async function ensureTodayQuickNoteContainer(): Promise<DbDocument> {
   }
 
   // Supabase path
-  const { data, error } = await supabase!
+  const { data: containerMatches, error } = await supabase!
     .from("documents")
     .select("*")
     .eq("parent_document_id", parent.id)
-    .contains("tags", [dateTag])
-    .limit(1)
-    .maybeSingle();
+    .overlaps("tags", lookupTags);
 
   if (error) throw error;
-  if (data) return data;
+  const container =
+    containerMatches?.find((d) => d.tags?.includes(dateTag)) ?? containerMatches?.[0];
+  if (container) return container;
 
   const doc = await createDocument(
     null, dateStr,
@@ -1924,7 +1925,8 @@ export async function createQuickNote(title: string): Promise<DbDocument> {
 export async function fetchTodayQuickNotes(): Promise<DbDocument[]> {
   const parent = await ensureQuickNoteParentDocument();
   const today = new Date();
-  const dateTag = today.toISOString().slice(0, 10);
+  const dateTag = localDateTag(today);
+  const lookupTags = dateTagsForLookup(today);
 
   if (!isSupabaseConfigured()) {
     const docs = getLocalDocuments();
@@ -1933,7 +1935,7 @@ export async function fetchTodayQuickNotes(): Promise<DbDocument[]> {
       (d) =>
         d.parent_document_id === parent.id &&
         d.doc_type === "note" &&
-        d.tags.includes(dateTag)
+        d.tags.some((t) => lookupTags.includes(t))
     );
     if (!container) return [];
     // Return children ordered newest first
@@ -1943,14 +1945,14 @@ export async function fetchTodayQuickNotes(): Promise<DbDocument[]> {
   }
 
   // Supabase: find today's container then its children
-  const { data: containerData } = await supabase!
+  const { data: containerRows } = await supabase!
     .from("documents")
-    .select("id")
+    .select("id, tags")
     .eq("parent_document_id", parent.id)
-    .contains("tags", [dateTag])
-    .limit(1)
-    .maybeSingle();
+    .overlaps("tags", lookupTags);
 
+  const containerData =
+    containerRows?.find((d) => d.tags?.includes(dateTag)) ?? containerRows?.[0];
   if (!containerData) return [];
 
   const { data, error } = await supabase!

@@ -23,6 +23,7 @@ import {
 import { DatabaseColumn, DatabaseRow, ColumnType } from "@/lib/databaseTypes";
 import { v4 as uuidv4 } from "uuid";
 
+import { authedFetch } from "@/lib/apiFetch";
 // =============================================================================
 // Helpers
 // =============================================================================
@@ -632,7 +633,7 @@ export function NotionImport({ isOpen, onClose }: NotionImportProps) {
       // Trigger AI indexing for all imported documents (fire-and-forget)
       const importedDocIds = [...createdDocs.keys()];
       if (importedDocIds.length > 0) {
-        fetch("/api/ai/backfill", {
+        authedFetch("/api/ai/backfill", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ documentIds: importedDocIds }),

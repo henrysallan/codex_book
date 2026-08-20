@@ -555,6 +555,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   createDocument: async (folderId: string | null = null, docType: import("./types").DocType = "note") => {
+    const state = get();
+    let targetFolderId = folderId;
+    if (targetFolderId === null) {
+      targetFolderId =
+        state.activeDocument?.folderId ??
+        state._dbDocuments.find((d) => d.id === state.activeDocumentId)?.folder_id ??
+        null;
+    }
+
+    if (targetFolderId && !state.expandedFolderIds.has(targetFolderId)) {
+      const expandedFolderIds = new Set(state.expandedFolderIds);
+      expandedFolderIds.add(targetFolderId);
+      set({ expandedFolderIds });
+    }
+
     // Optimistic: inject doc into local state immediately
     const now = new Date().toISOString();
     const tempId = uuidv4();
@@ -562,7 +577,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       id: tempId,
       title: docType === "moodboard" ? "Untitled Moodboard" : "Untitled",
       subtitle: null,
-      folder_id: folderId,
+      folder_id: targetFolderId,
       parent_document_id: null,
       user_id: "local",
       content: "[]",
@@ -583,7 +598,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     // Persist and open — must await so we return the real id
     const title = docType === "moodboard" ? "Untitled Moodboard" : "Untitled";
-    const dbDoc = await dbCreateDocument(folderId, title, "[]", null, docType);
+    const dbDoc = await dbCreateDocument(targetFolderId, title, "[]", null, docType);
     // If it's a moodboard, create the companion moodboard_state row
     if (docType === "moodboard") {
       try {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireUserForAI } from "@/lib/serverAuth";
 import {
   getServerSupabase,
   isServerSupabaseConfigured,
@@ -14,6 +15,12 @@ export const runtime = "nodejs";
  *   - days: number of days to look back (default 30)
  */
 export async function GET(req: Request) {
+  // These routes run with the service-role key and spend real LLM credits.
+  // Requires Authorization: Bearer <supabase access token> — the web client
+  // attaches it via authedFetch, trac3 via its Supabase session.
+  const auth = await requireUserForAI(req);
+  if (auth instanceof NextResponse) return auth;
+
   if (!isServerSupabaseConfigured()) {
     return NextResponse.json(
       { error: "Server Supabase not configured" },

@@ -37,6 +37,7 @@ import { X, FileText, FilePlus, MessageSquarePlus, MessageSquare, Trash2, Table2
 import { AnnotationChat } from "@/components/AnnotationChat";
 import { NoteSettingsButton } from "@/components/NoteSettingsButton";
 
+import { authedFetch } from "@/lib/apiFetch";
 interface DocumentEditorProps {
   document: Document;
 }
@@ -612,7 +613,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
           clearTimeout(indexTimeoutRef.current);
         }
         indexTimeoutRef.current = setTimeout(() => {
-          fetch("/api/ai/index", {
+          authedFetch("/api/ai/index", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ documentId: document.id }),
@@ -870,20 +871,26 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
         />
 
         {/* Tags row */}
-        <div className="flex items-center gap-4">
-          <span className="text-lg text-foreground">Tags:</span>
-          <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-start gap-2">
+          <span
+            className="text-muted-foreground shrink-0 pt-0.5"
+            style={{ fontSize: "calc(var(--note-font-size, 16px) * 0.8125)" }}
+          >
+            Tags:
+          </span>
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
             {tags.map((tag) => (
               <span
                 key={tag}
-                className="inline-flex items-center gap-1 px-3 py-0.5 rounded-full border border-border text-[13px] text-foreground bg-white"
+                className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full border border-border text-muted-foreground bg-white"
+                style={{ fontSize: "calc(var(--note-font-size, 16px) * 0.8125)" }}
               >
                 {tag}
                 <button
                   onClick={() => removeTag(tag)}
                   className="text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  <X size={10} />
+                  <X size={9} />
                 </button>
               </span>
             ))}
@@ -902,7 +909,8 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
                 }
               }}
               placeholder="Add tag..."
-              className="text-[13px] bg-transparent border-none outline-none placeholder:text-muted w-[80px]"
+              className="bg-transparent border-none outline-none placeholder:text-muted w-[72px] py-0.5"
+              style={{ fontSize: "calc(var(--note-font-size, 16px) * 0.8125)" }}
             />
           </div>
         </div>

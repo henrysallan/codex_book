@@ -26,6 +26,7 @@ import {
 } from "@/lib/ai/context";
 import { TOOL_DEFINITIONS, executeTool } from "@/lib/ai/tools";
 
+import { requireUserForAI } from "@/lib/serverAuth";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
@@ -40,6 +41,12 @@ const anthropic = new Anthropic({
  * Pipeline: route query → retrieve → assemble context → stream LLM response.
  */
 export async function POST(req: NextRequest) {
+  // These routes run with the service-role key and spend real LLM credits.
+  // Requires Authorization: Bearer <supabase access token> — the web client
+  // attaches it via authedFetch, trac3 via its Supabase session.
+  const auth = await requireUserForAI(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const body = await req.json();
     const {

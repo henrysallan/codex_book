@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { X, Loader2, BarChart3, DollarSign, Zap, Clock, LogOut } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
+import { authedFetch } from "@/lib/apiFetch";
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -74,7 +75,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/ai/usage?days=${d}`);
+      const res = await authedFetch(`/api/ai/usage?days=${d}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setUsage(data);

@@ -20,6 +20,7 @@ import {
 import { Markdown } from "@/components/Markdown";
 import type { SourceMap } from "@/lib/types";
 
+import { authedFetch } from "@/lib/apiFetch";
 const TOOL_LABELS: Record<string, string> = {
   search_notes: "Searching notes…",
   get_document_info: "Looking up document…",
@@ -221,7 +222,7 @@ export function ChatPanel() {
           model: requestBody.modelOverride,
         });
 
-        const res = await fetch("/api/ai/chat", {
+        const res = await authedFetch("/api/ai/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(requestBody),
