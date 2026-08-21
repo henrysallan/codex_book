@@ -16,6 +16,7 @@ import {
   Check,
   Globe,
   BookOpen,
+  Square,
 } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import type { SourceMap } from "@/lib/types";
@@ -111,6 +112,16 @@ export function ChatPanel() {
 
   const models = ["Auto", "Claude Haiku", "Claude Sonnet", "Claude Opus"];
 
+  const stopStreaming = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages, streamingContent]);
@@ -163,6 +174,9 @@ export function ChatPanel() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      let accumulated = "";
+      let meta: ChatMeta = {};
+
       try {
         // Resolve document context items to include their content from the store
         // so the server doesn't need to re-fetch from DB (avoids RLS issues)
@@ -171,11 +185,16 @@ export function ChatPanel() {
             return { type: "document" as const, docId, title, content: activeDocument.content };
           }
           const cached = _dbDocuments.find((d) => d.id === docId);
+          const content = cached?.content;
+          const usable =
+            typeof content === "string" && content.trim() && content.trim() !== "[]"
+              ? content
+              : undefined;
           return {
             type: "document" as const,
             docId,
             title,
-            content: cached?.content,
+            content: usable,
           };
         };
 
@@ -236,57 +255,68 @@ export function ChatPanel() {
         if (!reader) throw new Error("No response body");
 
         const decoder = new TextDecoder();
-        let accumulated = "";
-        let meta: ChatMeta = {};
+        let lineBuffer = "";
+
+        const handleSseLine = (line: string) => {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data: ")) return;
+          try {
+            const event = JSON.parse(trimmed.slice(6));
+            if (event.type === "meta") {
+              meta = {
+                tier: event.tier,
+                model: event.model,
+                documentIds: event.documentIds,
+                sourceMap: event.sourceMap,
+              };
+              setStreamingSourceMap(event.sourceMap);
+            } else if (event.type === "tool_use") {
+              setToolInProgress(event.tool);
+            } else if (event.type === "text") {
+              setToolInProgress(null);
+              accumulated += event.content;
+              setStreamingContent(accumulated);
+            } else if (event.type === "done") {
+              meta.tier = event.tier;
+              meta.documentIds = event.documentIds;
+              if (event.sourceMap) meta.sourceMap = event.sourceMap;
+            } else if (event.type === "doc_created") {
+              initialize();
+            } else if (event.type === "error") {
+              accumulated += `\n\n⚠️ Error: ${event.content}`;
+              setStreamingContent(accumulated);
+            }
+          } catch {
+            // skip malformed / partial JSON
+          }
+        };
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split("\n");
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            try {
-              const event = JSON.parse(line.slice(6));
-              if (event.type === "meta") {
-                meta = {
-                  tier: event.tier,
-                  model: event.model,
-                  documentIds: event.documentIds,
-                  sourceMap: event.sourceMap,
-                };
-                setStreamingSourceMap(event.sourceMap);
-              } else if (event.type === "tool_use") {
-                setToolInProgress(event.tool);
-              } else if (event.type === "text") {
-                setToolInProgress(null);
-                accumulated += event.content;
-                setStreamingContent(accumulated);
-              } else if (event.type === "done") {
-                meta.tier = event.tier;
-                meta.documentIds = event.documentIds;
-                if (event.sourceMap) meta.sourceMap = event.sourceMap;
-              } else if (event.type === "doc_created") {
-                // A note was created by the AI — refresh sidebar
-                initialize();
-              } else if (event.type === "error") {
-                accumulated += `\n\n⚠️ Error: ${event.content}`;
-                setStreamingContent(accumulated);
-              }
-            } catch {
-              // skip malformed
-            }
-          }
+          lineBuffer += decoder.decode(value, { stream: true });
+          const lines = lineBuffer.split("\n");
+          lineBuffer = lines.pop() ?? "";
+          for (const line of lines) handleSseLine(line);
         }
+        if (lineBuffer) handleSseLine(lineBuffer);
 
         if (accumulated) {
           addChatMessage({ role: "assistant", content: accumulated, sourceMap: meta.sourceMap });
         }
         setLastMeta(meta);
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if ((err as Error).name === "AbortError") {
+          if (accumulated) {
+            addChatMessage({
+              role: "assistant",
+              content: accumulated,
+              sourceMap: meta.sourceMap,
+            });
+          }
+          return;
+        }
         console.error("[ChatPanel] Stream error:", err);
         addChatMessage({
           role: "assistant",
@@ -572,14 +602,27 @@ export function ChatPanel() {
                 {researchMode ? "Research" : "Notes"}
               </button>
 
-              {/* Send button */}
-              <button
-                onClick={handleSend}
-                disabled={!input.trim() || isStreaming}
-                className="p-1 rounded text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
-              >
-                <Send size={14} />
-              </button>
+              {/* Send / stop */}
+              {isStreaming ? (
+                <button
+                  onClick={stopStreaming}
+                  className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
+                  title="Stop generating"
+                  aria-label="Stop generating"
+                  type="button"
+                >
+                  <Square size={12} fill="currentColor" />
+                </button>
+              ) : (
+                <button
+                  onClick={handleSend}
+                  disabled={!input.trim()}
+                  className="p-1 rounded text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
+                  type="button"
+                >
+                  <Send size={14} />
+                </button>
+              )}
             </div>
           </div>
         </div>

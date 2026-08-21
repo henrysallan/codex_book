@@ -7,7 +7,6 @@ import {
   getSortedRowModel,
   ColumnDef,
   SortingState,
-  flexRender,
   Header,
 } from "@tanstack/react-table";
 import {
@@ -42,10 +41,15 @@ import { Plus, GripVertical } from "lucide-react";
 import { createDocument as dbCreateDocument, updateDocument as dbUpdateDocument } from "@/lib/db";
 import { useAppStore } from "@/lib/store";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 interface DatabaseTableProps {
-  block: any;
-  editor: any;
+  block: { props: { columns: string; rows: string } };
+  editor: {
+    updateBlock: (
+      block: { props: { columns: string; rows: string } },
+      update: { props: Record<string, string> }
+    ) => void;
+  };
 }
 
 export function DatabaseTable({ block, editor }: DatabaseTableProps) {

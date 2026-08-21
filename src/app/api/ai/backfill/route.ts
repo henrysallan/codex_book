@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
   // attaches it via authedFetch, trac3 via its Supabase session.
   const auth = await requireUserForAI(req);
   if (auth instanceof NextResponse) return auth;
+  const userId = auth.id;
 
   if (!isServerSupabaseConfigured()) {
     return NextResponse.json(
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
   let query = supabase
     .from("documents")
     .select("id")
+    .eq("user_id", userId)
     .order("updated_at", { ascending: false });
 
   if (documentIds && documentIds.length > 0) {
@@ -98,25 +100,9 @@ export async function POST(req: NextRequest) {
 
   console.log(`[/api/ai/backfill] Starting backfill for ${docs.length} documents (force=${force})`);
 
-  // If force-reindexing, clear content_hash so indexDocument won't skip them
-  if (force) {
-    const docIds = docs.map((d: { id: string }) => d.id);
-    console.log(`[/api/ai/backfill] Force mode: clearing content_hash and chunks for ${docIds.length} docs`);
-
-    // Null out content_hash so the hash-check in indexDocument won't short-circuit
-    await supabase
-      .from("documents")
-      .update({ content_hash: null })
-      .in("id", docIds);
-
-    // Delete all existing chunks so they get fully regenerated
-    await supabase
-      .from("document_chunks")
-      .delete()
-      .in("document_id", docIds);
-  }
-
-  // Process documents sequentially to avoid rate limits
+  // Process documents sequentially to avoid rate limits.
+  // Force-clear of chunks happens inside indexDocument per doc so a timeout
+  // cannot wipe the rest of the corpus first.
   const results: Array<{
     documentId: string;
     status: string;
@@ -125,7 +111,7 @@ export async function POST(req: NextRequest) {
 
   for (const doc of docs) {
     try {
-      const result = await indexDocument(doc.id);
+      const result = await indexDocument(doc.id, userId, { force });
       results.push({
         documentId: doc.id,
         status: result.status,

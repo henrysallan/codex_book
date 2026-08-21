@@ -37,6 +37,9 @@ const QN_DAY_BLOCK_ID = "qn-day-db-block";
 
 export const QUICK_NOTE_TAG = "quick note";
 
+const DOCUMENT_ROW_COLUMNS =
+  "id, title, tags, content, doc_type, parent_document_id, user_id, created_at, updated_at";
+
 export type DocumentRow = {
   id: string;
   title: string;
@@ -124,7 +127,7 @@ async function insertDocument(
       created_at: now,
       updated_at: now,
     })
-    .select("*")
+    .select(DOCUMENT_ROW_COLUMNS)
     .single();
 
   if (error) throw error;
@@ -138,7 +141,7 @@ export async function ensureQuickNoteParent(
 ): Promise<DocumentRow> {
   const { data, error } = await admin
     .from("documents")
-    .select("*")
+    .select(DOCUMENT_ROW_COLUMNS)
     .eq("doc_type", "quick_note_parent")
     .eq("user_id", userId)
     .limit(1)
@@ -147,12 +150,27 @@ export async function ensureQuickNoteParent(
   if (error) throw error;
   if (data) return data as DocumentRow;
 
-  return insertDocument(admin, userId, {
-    title: "Quick Notes",
-    content: buildParentDatabaseContent([]),
-    parentDocumentId: null,
-    docType: "quick_note_parent",
-  });
+  try {
+    return await insertDocument(admin, userId, {
+      title: "Quick Notes",
+      content: buildParentDatabaseContent([]),
+      parentDocumentId: null,
+      docType: "quick_note_parent",
+    });
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code !== "23505") throw err;
+    const { data: again, error: againErr } = await admin
+      .from("documents")
+      .select(DOCUMENT_ROW_COLUMNS)
+      .eq("doc_type", "quick_note_parent")
+      .eq("user_id", userId)
+      .limit(1)
+      .maybeSingle();
+    if (againErr) throw againErr;
+    if (again) return again as DocumentRow;
+    throw err;
+  }
 }
 
 /**
@@ -185,7 +203,7 @@ export async function ensureContainer(
 
   const { data: matches, error } = await admin
     .from("documents")
-    .select("*")
+    .select(DOCUMENT_ROW_COLUMNS)
     .eq("parent_document_id", parent.id)
     .eq("user_id", userId)
     .overlaps("tags", lookupTags);
@@ -196,19 +214,35 @@ export async function ensureContainer(
     matches?.find((d: DocumentRow) => d.tags?.includes(dateTag)) ?? matches?.[0];
   if (existing) return existing as DocumentRow;
 
-  const container = await insertDocument(admin, userId, {
-    title: hasOverride ? titleFromDateTag(dateTag) : dayContainerTitle(now),
-    content: buildDayDatabaseContent([]),
-    parentDocumentId: parent.id,
-    docType: "note",
-    tags: [dateTag],
-    createdAt: now,
-  });
+  try {
+    const container = await insertDocument(admin, userId, {
+      title: hasOverride ? titleFromDateTag(dateTag) : dayContainerTitle(now),
+      content: buildDayDatabaseContent([]),
+      parentDocumentId: parent.id,
+      docType: "note",
+      tags: [dateTag],
+      createdAt: now,
+    });
 
-  if (options?.sync !== false) {
-    await syncQuickNoteDatabases(admin, userId, parent.id);
+    if (options?.sync !== false) {
+      await syncQuickNoteDatabases(admin, userId, parent.id);
+    }
+    return container;
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code !== "23505") throw err;
+    const { data: again, error: againErr } = await admin
+      .from("documents")
+      .select(DOCUMENT_ROW_COLUMNS)
+      .eq("parent_document_id", parent.id)
+      .eq("user_id", userId)
+      .overlaps("tags", lookupTags);
+    if (againErr) throw againErr;
+    const recovered =
+      again?.find((d: DocumentRow) => d.tags?.includes(dateTag)) ?? again?.[0];
+    if (recovered) return recovered as DocumentRow;
+    throw err;
   }
-  return container;
 }
 
 /**
@@ -225,53 +259,83 @@ export async function syncQuickNoteDatabases(
   parentId: string,
   dayContainerId?: string
 ): Promise<void> {
-  const { data: dayDocs } = await admin
+  const { data: dayDocs, error: dayErr } = await admin
     .from("documents")
     .select("id, title, tags, created_at")
     .eq("parent_document_id", parentId)
     .eq("user_id", userId)
     .eq("doc_type", "note")
     .order("created_at", { ascending: false });
+  if (dayErr) throw dayErr;
 
   const containers = dayDocs ?? [];
   const allNotes: { id: string; title: string; dateTag: string }[] = [];
+  const childrenByParent = new Map<string, { id: string; title: string }[]>();
+
+  if (containers.length > 0) {
+    const { data: children, error: childErr } = await admin
+      .from("documents")
+      .select("id, title, parent_document_id, created_at")
+      .eq("user_id", userId)
+      .in(
+        "parent_document_id",
+        containers.map((c: { id: string }) => c.id)
+      )
+      .order("created_at", { ascending: false });
+    if (childErr) throw childErr;
+
+    for (const child of children ?? []) {
+      const pid = child.parent_document_id as string | null;
+      if (!pid) continue;
+      const list = childrenByParent.get(pid) ?? [];
+      list.push({ id: child.id, title: child.title });
+      childrenByParent.set(pid, list);
+    }
+  }
 
   for (const container of containers) {
     const tags: string[] = container.tags ?? [];
     const dateTag = tags.find((t) => /^\d{4}-\d{2}-\d{2}$/.test(t)) ?? "";
-
-    const { data: children } = await admin
-      .from("documents")
-      .select("id, title, created_at")
-      .eq("parent_document_id", container.id)
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false });
-
-    for (const child of children ?? []) {
+    for (const child of childrenByParent.get(container.id) ?? []) {
       allNotes.push({ id: child.id, title: child.title, dateTag });
-    }
-
-    const shouldSyncThisDay = !dayContainerId || dayContainerId === container.id;
-    if (shouldSyncThisDay) {
-      await admin
-        .from("documents")
-        .update({
-          content: buildDayDatabaseContent(
-            (children ?? []).map((c: { id: string; title: string }) => ({ id: c.id, title: c.title }))
-          ),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", container.id);
     }
   }
 
-  await admin
+  const parentContent = buildParentDatabaseContent(allNotes);
+  const { data: parentRow } = await admin
     .from("documents")
-    .update({
-      content: buildParentDatabaseContent(allNotes),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", parentId);
+    .select("content")
+    .eq("id", parentId)
+    .maybeSingle();
+  if (parentRow?.content !== parentContent) {
+    await admin
+      .from("documents")
+      .update({ content: parentContent, updated_at: new Date().toISOString() })
+      .eq("id", parentId);
+  }
+
+  const toSync = dayContainerId
+    ? containers.filter((c: { id: string }) => c.id === dayContainerId)
+    : containers;
+
+  for (const container of toSync) {
+    const dayContent = buildDayDatabaseContent(
+      childrenByParent.get(container.id) ?? []
+    );
+    const { data: dayRow } = await admin
+      .from("documents")
+      .select("content")
+      .eq("id", container.id)
+      .maybeSingle();
+    if (dayRow?.content === dayContent) continue;
+    await admin
+      .from("documents")
+      .update({
+        content: dayContent,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", container.id);
+  }
 }
 
 // ─── Capture ───
@@ -328,7 +392,7 @@ export async function createQuickNote(
   if (input.id) {
     const { data: existing } = await admin
       .from("documents")
-      .select("*")
+      .select(DOCUMENT_ROW_COLUMNS)
       .eq("id", input.id)
       .maybeSingle();
     if (existing) {
@@ -348,7 +412,7 @@ export async function createQuickNote(
         ]);
         const { data: updated } = await admin
           .from("documents")
-          .select("*")
+          .select(DOCUMENT_ROW_COLUMNS)
           .eq("id", input.id)
           .maybeSingle();
         return { document: (updated ?? existing) as DocumentRow, created: false };
@@ -420,7 +484,7 @@ export async function refileQuickNotes(
   const ids = [...new Set(items.map((item) => item.id))];
   const { data: rows, error } = await admin
     .from("documents")
-    .select("*")
+    .select(DOCUMENT_ROW_COLUMNS)
     .in("id", ids)
     .eq("user_id", userId);
   if (error) throw error;

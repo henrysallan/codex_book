@@ -121,7 +121,7 @@ const TIER1_PATTERNS = [
   /in\s+my\s+notes?/i,
   /from\s+my\s+notes?/i,
   /my\s+notes?\s+(on|about|regarding)/i,
-  /what\s+(have|did)\s+I\s+(written|said|noted|wrote|thought)/i,
+  /what\s+(have|did)\s+I\s+(written|said|noted|wrote|thought|write)/i,
   /what\s+do\s+I\s+(have|know|think)\s+(on|about|regarding)/i,
   /find\s+(notes?|documents?|pages?)\s+(on|about)/i,
   /show\s+me\s+(notes?|documents?|pages?)/i,
@@ -185,7 +185,7 @@ function applyHeuristics(input: RouteInput): Tier | null {
 
   // GENERAL — pure research / knowledge questions that don't reference the
   // user's notes. Only applies when the query has no notes-related keywords.
-  const NOTES_ANCHOR_RE = /\b(my\s+notes?|my\s+documents?|my\s+knowledge\s*base|in\s+my|from\s+my|I\s+(wrote|wrote|noted|have))\b/i;
+  const NOTES_ANCHOR_RE = /\b(my\s+notes?|my\s+documents?|my\s+knowledge\s*base|in\s+my|from\s+my|I\s+(wrote|write|noted|have))\b/i;
   if (!NOTES_ANCHOR_RE.test(query)) {
     for (const pattern of GENERAL_PATTERNS) {
       if (pattern.test(query)) {

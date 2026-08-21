@@ -50,7 +50,7 @@ export function PdfAnnotationPopover({
   const [noteText, setNoteText] = useState(annotation.note ?? "");
   const [chatInput, setChatInput] = useState("");
   const [isSending, setIsSending] = useState(false);
-  const [streamingContent, setStreamingContent] = useState("");
+  const [streamingContent] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const noteTimerRef = useRef<ReturnType<typeof setTimeout>>(null);
 

@@ -22,7 +22,8 @@ const MODEL = "claude-haiku-4-5-20251001";
  * about *where* the highlighted text lives.
  */
 async function fetchDocumentContext(
-  documentId: string
+  documentId: string,
+  userId: string
 ): Promise<{ title: string; plainText: string } | null> {
   if (!isServerSupabaseConfigured()) return null;
   const supabase = getServerSupabase();
@@ -31,6 +32,7 @@ async function fetchDocumentContext(
   const { data, error } = await supabase
     .from("documents")
     .select("title, content")
+    .eq("user_id", userId)
     .eq("id", documentId)
     .single();
 
@@ -135,7 +137,8 @@ async function embedAnnotation(
   annotationId: string,
   highlightedText: string,
   messages: { role: string; content: string }[],
-  lastAssistantResponse: string
+  lastAssistantResponse: string,
+  userId: string
 ): Promise<void> {
   const supabase = getServerSupabase();
   if (!supabase) return;
@@ -155,7 +158,8 @@ async function embedAnnotation(
   await supabase
     .from("annotations")
     .update({ summary, embedding: JSON.stringify(embedding) })
-    .eq("id", annotationId);
+    .eq("id", annotationId)
+    .eq("user_id", userId);
 }
 
 /**
@@ -170,6 +174,7 @@ export async function POST(req: NextRequest) {
   // attaches it via authedFetch, trac3 via its Supabase session.
   const auth = await requireUserForAI(req);
   if (auth instanceof NextResponse) return auth;
+  const userId = auth.id;
 
   try {
     const body = await req.json();
@@ -194,7 +199,7 @@ export async function POST(req: NextRequest) {
 
     // Fetch surrounding document for context
     const docContext = documentId
-      ? await fetchDocumentContext(documentId)
+      ? await fetchDocumentContext(documentId, userId)
       : null;
 
     const systemPrompt = buildSystemPrompt(highlightedText, docContext);
@@ -248,13 +253,14 @@ export async function POST(req: NextRequest) {
             inputTokens,
             outputTokens,
             documentId: documentId ?? undefined,
+            userId,
           }).catch(() => {});
 
           // Embed the annotation thread (fire and forget)
           // After 2+ messages (at least one exchange), generate an embedding
           // so the annotation is searchable in Flow 1
           if (messages.length >= 2 && annotationId) {
-            embedAnnotation(annotationId, highlightedText, messages, finalResponseText).catch(
+            embedAnnotation(annotationId, highlightedText, messages, finalResponseText, userId).catch(
               (e: unknown) => console.error("[/api/ai/annotate] Embedding error:", e)
             );
           }

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useAppStore } from "@/lib/store";
 import { Document, Annotation, NoteSettings } from "@/lib/types";
-import { parseBacklinks, syncBacklinks, createDocument as dbCreateDocument } from "@/lib/db";
+import { parseBacklinks, syncBacklinks, createDocument as dbCreateDocument, keepalivePatchDocument, StaleWriteError, dbDocumentToDocument } from "@/lib/db";
 import { schema } from "@/lib/editorSchema";
 import { useCreateBlockNote, useBlockNoteEditor } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
@@ -384,6 +384,14 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const indexTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [syncStatus, setSyncStatus] = useState<"synced" | "pending" | "saving" | "error">("synced");
+  const syncStatusRef = useRef(syncStatus);
+  syncStatusRef.current = syncStatus;
+  const seedingRef = useRef(false);
+  const baseUpdatedAtRef = useRef(document.updatedAt);
+  const titleRef = useRef(title);
+  const subtitleRef = useRef(subtitle);
+  titleRef.current = title;
+  subtitleRef.current = subtitle;
   const [lastSavedAt, setLastSavedAt] = useState(() =>
     document.updatedAt ? new Date(document.updatedAt).getTime() : Date.now()
   );
@@ -402,30 +410,50 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
   const [entryInput, setEntryInput] = useState("");
   const entryInputRef = useRef<HTMLInputElement>(null);
 
+  const settingsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSettings = useRef<NoteSettings | null>(null);
+
   const handleSettingsChange = useCallback(
     (newSettings: NoteSettings) => {
       setNoteSettings(newSettings);
-      saveDocument(document.id, { settings: newSettings });
+      pendingSettings.current = newSettings;
+      if (settingsSaveTimer.current) clearTimeout(settingsSaveTimer.current);
+      settingsSaveTimer.current = setTimeout(() => {
+        const next = pendingSettings.current;
+        pendingSettings.current = null;
+        settingsSaveTimer.current = null;
+        if (next) saveDocument(document.id, { settings: next });
+      }, 400);
     },
     [document.id, saveDocument]
   );
+
+  useEffect(() => {
+    return () => {
+      if (settingsSaveTimer.current) {
+        clearTimeout(settingsSaveTimer.current);
+        const next = pendingSettings.current;
+        if (next) saveDocument(document.id, { settings: next });
+      }
+    };
+  }, [document.id, saveDocument]);
 
   // Load annotations for this document
   useEffect(() => {
     loadAnnotations(document.id);
   }, [document.id, loadAnnotations]);
 
-  // Parse initial content for BlockNote
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let initialContent: any[] | undefined;
-  try {
-    const parsed = JSON.parse(document.content);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      initialContent = parsed;
+  const initialContent = useMemo(() => {
+    try {
+      const parsed = JSON.parse(document.content);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+      // fall through
     }
-  } catch {
-    initialContent = undefined;
-  }
+    return undefined;
+    // Only parse at mount for this document; autosave must not rebuild the editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [document.id]);
 
   const editor = useCreateBlockNote({
     schema,
@@ -586,47 +614,208 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
 
   // ─── Auto-save on content change ───
 
-  const handleEditorChange = useCallback(() => {
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
-    setSyncStatus("pending");
-    saveTimeoutRef.current = setTimeout(async () => {
+  const triggerIndex = useCallback((docId: string) => {
+    authedFetch("/api/ai/index", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId: docId }),
+    }).catch((err) =>
+      console.error("[AI index] Failed to trigger indexing:", err)
+    );
+  }, []);
+
+  const applyRemoteDocument = useCallback(
+    (remote: { content: string; updatedAt: string; title: string; subtitle: string | null }) => {
+      seedingRef.current = true;
+      try {
+        const parsed = JSON.parse(remote.content);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          editor.replaceBlocks(editor.document, parsed);
+        }
+      } catch {
+        // leave local blocks if remote content is unreadable
+      } finally {
+        queueMicrotask(() => {
+          seedingRef.current = false;
+        });
+      }
+      baseUpdatedAtRef.current = remote.updatedAt;
+      setTitle(remote.title);
+      setSubtitle(remote.subtitle || "");
+      setSyncStatus("synced");
+      setLastSavedAt(Date.parse(remote.updatedAt) || Date.now());
+    },
+    [editor]
+  );
+
+  const persistContent = useCallback(
+    async (opts?: { fromUnload?: boolean }) => {
+      const blocks = editor.document;
+      const content = JSON.stringify(blocks);
+      const expectedUpdatedAt = baseUpdatedAtRef.current;
+      const titleNow = titleRef.current.trim() || "Untitled";
+      const subtitleNow = subtitleRef.current;
+      const meta: { title?: string; subtitle?: string | null } = {};
+      if (titleNow !== document.title) meta.title = titleNow;
+      if (subtitleNow !== (document.subtitle || "")) meta.subtitle = subtitleNow || null;
+
+      if (opts?.fromUnload) {
+        keepalivePatchDocument(
+          document.id,
+          { content, ...meta },
+          expectedUpdatedAt
+        );
+        return;
+      }
+
       setSyncStatus("saving");
       try {
-        const blocks = editor.document;
-        const content = JSON.stringify(blocks);
-        await saveDocument(document.id, { content });
+        await saveDocument(document.id, {
+          content,
+          ...meta,
+          ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}),
+        });
 
-        // Parse and sync backlinks (supports both [[wikilinks]] and pageLink nodes)
         try {
           const targetIds = parseBacklinks(content, _dbDocuments);
           await syncBacklinks(document.id, targetIds);
         } catch (err) {
           console.error("Failed to sync backlinks:", err);
         }
+
+        const savedAt =
+          useAppStore.getState().activeDocument?.updatedAt ??
+          new Date().toISOString();
+        baseUpdatedAtRef.current = savedAt;
         setSyncStatus("synced");
         setLastSavedAt(Date.now());
 
-        // Debounced AI indexing (30s after last save)
-        if (indexTimeoutRef.current) {
-          clearTimeout(indexTimeoutRef.current);
-        }
+        if (indexTimeoutRef.current) clearTimeout(indexTimeoutRef.current);
         indexTimeoutRef.current = setTimeout(() => {
-          authedFetch("/api/ai/index", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ documentId: document.id }),
-          }).catch((err) =>
-            console.error("[AI index] Failed to trigger indexing:", err)
-          );
+          triggerIndex(document.id);
         }, 30_000);
       } catch (err) {
+        if (err instanceof StaleWriteError) {
+          console.warn("[editor] Stale write — reloading newer version");
+          const mapped = dbDocumentToDocument(err.current);
+          applyRemoteDocument({
+            content: mapped.content,
+            updatedAt: mapped.updatedAt,
+            title: mapped.title,
+            subtitle: mapped.subtitle,
+          });
+          return;
+        }
         console.error("Failed to save document:", err);
         setSyncStatus("error");
       }
+    },
+    [
+      editor,
+      document.id,
+      document.title,
+      document.subtitle,
+      saveDocument,
+      _dbDocuments,
+      triggerIndex,
+      applyRemoteDocument,
+    ]
+  );
+
+  const handleEditorChange = useCallback(() => {
+    if (seedingRef.current) return;
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    setSyncStatus("pending");
+    saveTimeoutRef.current = setTimeout(() => {
+      saveTimeoutRef.current = null;
+      void persistContent();
     }, 1000);
-  }, [editor, document.id, saveDocument, _dbDocuments]);
+  }, [persistContent]);
+
+  // Re-seed BlockNote when a background refresh brings a newer version and
+  // this editor has nothing pending.
+  useEffect(() => {
+    if (syncStatusRef.current !== "synced") return;
+    if (!document.updatedAt || document.updatedAt === baseUpdatedAtRef.current) {
+      return;
+    }
+    applyRemoteDocument({
+      content: document.content,
+      updatedAt: document.updatedAt,
+      title: document.title,
+      subtitle: document.subtitle,
+    });
+  }, [document.updatedAt, document.content, document.title, document.subtitle, applyRemoteDocument]);
+
+  // Flush pending save + index on unmount (doc switch, tab close).
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+        const content = JSON.stringify(editor.document);
+        const titleNow = titleRef.current.trim() || "Untitled";
+        const subtitleNow = subtitleRef.current;
+        const meta: { title?: string; subtitle?: string | null } = {};
+        if (titleNow !== document.title) meta.title = titleNow;
+        if (subtitleNow !== (document.subtitle || "")) {
+          meta.subtitle = subtitleNow || null;
+        }
+        void saveDocument(document.id, {
+          content,
+          ...meta,
+          ...(baseUpdatedAtRef.current
+            ? { expectedUpdatedAt: baseUpdatedAtRef.current }
+            : {}),
+        })
+          .then(() => triggerIndex(document.id))
+          .catch((err) => {
+            if (!(err instanceof StaleWriteError)) {
+              console.error("Failed to flush document on unmount:", err);
+            }
+          });
+      } else if (indexTimeoutRef.current) {
+        clearTimeout(indexTimeoutRef.current);
+        triggerIndex(document.id);
+      }
+    };
+    // Intentionally mount-scoped: flush the editor instance that was open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [document.id]);
+
+  // Warn on window close and keepalive-flush unsaved content.
+  useEffect(() => {
+    const flushIfDirty = () => {
+      if (syncStatusRef.current === "synced") return;
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+      void persistContent({ fromUnload: true });
+    };
+
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (syncStatusRef.current === "synced") return;
+      flushIfDirty();
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    const onPageHide = () => flushIfDirty();
+    const onVisibility = () => {
+      if (window.document.visibilityState === "hidden") flushIfDirty();
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("pagehide", onPageHide);
+    window.document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("pagehide", onPageHide);
+      window.document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [persistContent]);
 
   // ─── Title / subtitle / tags handlers ───
 
@@ -697,18 +886,6 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
     ),
     [document.id]
   );
-
-  // Clean up timeouts on unmount
-  useEffect(() => {
-    return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-      if (indexTimeoutRef.current) {
-        clearTimeout(indexTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const activeAnnotation = useAppStore((s) => s.activeAnnotation);
 

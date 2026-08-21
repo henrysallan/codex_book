@@ -68,6 +68,7 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
         onClick={() => setOpen((o) => !o)}
         className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-black/5 transition-colors pointer-events-auto"
         title="Note settings"
+        aria-label="Note settings"
       >
         <Settings size={14} />
       </button>
@@ -101,7 +102,9 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
             </label>
             <div className="flex items-center gap-1.5">
               <button
+                type="button"
                 onClick={() => setFontSize(fontSize - 0.1)}
+                aria-label="Decrease font size"
                 className="shrink-0 p-1 rounded-md border border-border hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
               >
                 <Minus size={12} />
@@ -115,7 +118,9 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
                 className="flex-1 min-w-0 h-1 accent-foreground"
               />
               <button
+                type="button"
                 onClick={() => setFontSize(fontSize + 0.1)}
+                aria-label="Increase font size"
                 className="shrink-0 p-1 rounded-md border border-border hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
               >
                 <Plus size={12} />
@@ -127,7 +132,10 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
           <div className="flex items-center justify-between">
             <label className="text-xs text-muted-foreground">Full width</label>
             <button
+              type="button"
               onClick={toggleFullWidth}
+              aria-label={fullWidth ? "Use default width" : "Use full width"}
+              aria-pressed={fullWidth}
               className={`relative w-8 h-[18px] rounded-full transition-colors ${
                 fullWidth ? "bg-foreground" : "bg-black/15"
               }`}

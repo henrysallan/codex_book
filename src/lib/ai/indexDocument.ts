@@ -38,6 +38,13 @@ export interface IndexResult {
 
 // ─── Helpers ───
 
+function requireOk(
+  error: { message: string } | null,
+  what: string
+): void {
+  if (error) throw new Error(`${what}: ${error.message}`);
+}
+
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
@@ -45,11 +52,13 @@ function sha256(text: string): string {
 /**
  * Fetch the existing tag vocabulary from the database for controlled tag generation.
  */
-async function fetchExistingTags(): Promise<string[]> {
+async function fetchExistingTags(userId: string): Promise<string[]> {
   const supabase = getServerSupabase();
   if (!supabase) return [];
   try {
-    const { data, error } = await supabase.rpc("get_all_tags");
+    const { data, error } = await supabase.rpc("get_all_tags", {
+      p_user_id: userId,
+    });
     if (error || !data) return [];
     return Array.isArray(data) ? data.filter(Boolean) : [];
   } catch {
@@ -59,7 +68,11 @@ async function fetchExistingTags(): Promise<string[]> {
 
 // ─── Main Pipeline ───
 
-export async function indexDocument(documentId: string): Promise<IndexResult> {
+export async function indexDocument(
+  documentId: string,
+  userId: string,
+  options?: { force?: boolean }
+): Promise<IndexResult> {
   const supabase = getServerSupabase();
   if (!supabase) {
     return {
@@ -73,11 +86,32 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
     };
   }
 
-  // Mark as processing
-  await supabase
+  // Mark as processing only if this user owns the document
+  const { data: owned, error: ownedErr } = await supabase
+    .from("documents")
+    .select("id")
+    .eq("id", documentId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (ownedErr || !owned) {
+    return {
+      status: "error",
+      documentId,
+      chunksTotal: 0,
+      chunksNew: 0,
+      chunksKept: 0,
+      chunksDeleted: 0,
+      error: "Document not found",
+    };
+  }
+
+  const { error: processingErr } = await supabase
     .from("documents")
     .update({ index_status: "processing" })
-    .eq("id", documentId);
+    .eq("id", documentId)
+    .eq("user_id", userId);
+  requireOk(processingErr, "mark processing");
 
   try {
     // ── Step 1: Fetch document ──
@@ -86,6 +120,7 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
       .from("documents")
       .select("id, title, content, content_hash")
       .eq("id", documentId)
+      .eq("user_id", userId)
       .single();
 
     if (docError || !doc) {
@@ -93,13 +128,34 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
     }
 
     const newHash = sha256(doc.content);
+    const force = options?.force === true;
 
-    // Skip if content hasn't changed
-    if (doc.content_hash === newHash) {
-      await supabase
+    // Force reindex: drop this document's chunks only, and skip the hash
+    // short-circuit. Clearing happens here (not up-front for the whole corpus)
+    // so a timeout mid-backfill leaves remaining docs intact.
+    if (force) {
+      const { error: clearHashErr } = await supabase
+        .from("documents")
+        .update({ content_hash: null })
+        .eq("id", documentId)
+        .eq("user_id", userId);
+      requireOk(clearHashErr, "force-clear content_hash");
+
+      const { error: clearChunksErr } = await supabase
+        .from("document_chunks")
+        .delete()
+        .eq("document_id", documentId);
+      requireOk(clearChunksErr, "force-clear chunks");
+    }
+
+    // Skip if content hasn't changed (never on force — hash was just nulled)
+    if (!force && doc.content_hash === newHash) {
+      const { error: skipErr } = await supabase
         .from("documents")
         .update({ index_status: "indexed" })
-        .eq("id", documentId);
+        .eq("id", documentId)
+        .eq("user_id", userId);
+      requireOk(skipErr, "mark skipped-as-indexed");
 
       return {
         status: "skipped",
@@ -116,11 +172,13 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
     const newChunks = blocksToChunks(doc.content);
     if (newChunks.length === 0) {
       // Empty document — clean up any existing chunks
-      await supabase
+      const { error: emptyDelErr } = await supabase
         .from("document_chunks")
         .delete()
         .eq("document_id", documentId);
-      await supabase
+      requireOk(emptyDelErr, "delete chunks for empty doc");
+
+      const { error: emptyUpdErr } = await supabase
         .from("documents")
         .update({
           content_hash: newHash,
@@ -129,7 +187,9 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
           embedding: null,
           index_status: "indexed",
         })
-        .eq("id", documentId);
+        .eq("id", documentId)
+        .eq("user_id", userId);
+      requireOk(emptyUpdErr, "index empty document");
 
       return {
         status: "indexed",
@@ -146,11 +206,12 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
 
     // ── Step 3: Diff against existing chunks ──
 
-    const { data: existingChunks } = await supabase
+    const { data: existingChunks, error: existingErr } = await supabase
       .from("document_chunks")
       .select("id, chunk_index, content_hash, summary, tags")
       .eq("document_id", documentId)
       .order("chunk_index", { ascending: true });
+    requireOk(existingErr, "fetch existing chunks");
 
     const existing: ExistingChunk[] = existingChunks ?? [];
     const existingByHash = new Map(existing.map((c) => [c.content_hash, c]));
@@ -177,7 +238,7 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
 
     // ── Step 4: Summarize + tag new chunks ──
 
-    const existingTags = await fetchExistingTags();
+    const existingTags = await fetchExistingTags(userId);
 
     const summaryResults = await Promise.all(
       toProcess.map(({ chunk }) =>
@@ -199,34 +260,32 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
 
     // Delete removed chunks
     if (deletedIds.length > 0) {
-      await supabase
+      const { error: delErr } = await supabase
         .from("document_chunks")
         .delete()
         .in("id", deletedIds);
+      requireOk(delErr, "delete stale chunks");
     }
 
-    // Update kept chunks (just fix the chunk_index if it moved)
     for (const { existingId, newIndex } of kept) {
-      await supabase
+      const { error: keepErr } = await supabase
         .from("document_chunks")
         .update({ chunk_index: newIndex })
         .eq("id", existingId);
+      requireOk(keepErr, `reindex kept chunk ${existingId}`);
     }
 
-    // Upsert new/changed chunks
     for (let i = 0; i < toProcess.length; i++) {
       const { chunk, index, hash } = toProcess[i];
       const { summary, tags } = summaryResults[i];
       const embedding = newEmbeddings[i] ?? null;
 
-      // Try to find an existing chunk with this hash that had no summary (needs reprocessing)
       const existingMatch = existing.find(
         (e) => e.content_hash === hash && !e.summary
       );
 
       if (existingMatch) {
-        // Update existing record
-        await supabase
+        const { error: updErr } = await supabase
           .from("document_chunks")
           .update({
             chunk_index: index,
@@ -239,9 +298,9 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
             embedding: embedding ? `[${embedding.join(",")}]` : null,
           })
           .eq("id", existingMatch.id);
+        requireOk(updErr, `update chunk ${existingMatch.id}`);
       } else {
-        // Insert new chunk
-        await supabase.from("document_chunks").insert({
+        const { error: insErr } = await supabase.from("document_chunks").insert({
           document_id: documentId,
           chunk_index: index,
           content: chunk.content,
@@ -253,6 +312,7 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
           tags,
           embedding: embedding ? `[${embedding.join(",")}]` : null,
         });
+        requireOk(insErr, `insert chunk ${index}`);
       }
     }
 
@@ -319,7 +379,7 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
 
     // ── Step 8: Update document metadata ──
 
-    await supabase
+    const { error: metaErr } = await supabase
       .from("documents")
       .update({
         content_hash: newHash,
@@ -328,7 +388,9 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
         embedding: docEmbedding ? `[${docEmbedding.join(",")}]` : null,
         index_status: "indexed",
       })
-      .eq("id", documentId);
+      .eq("id", documentId)
+      .eq("user_id", userId);
+    requireOk(metaErr, "write document index metadata");
 
     return {
       status: "indexed",
@@ -345,7 +407,8 @@ export async function indexDocument(documentId: string): Promise<IndexResult> {
     await supabase
       .from("documents")
       .update({ index_status: "error" })
-      .eq("id", documentId);
+      .eq("id", documentId)
+      .eq("user_id", userId);
 
     return {
       status: "error",

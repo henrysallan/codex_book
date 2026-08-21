@@ -32,11 +32,10 @@ const AuthContext = createContext<AuthContextType>({
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => isSupabaseConfigured());
 
   useEffect(() => {
     if (!isSupabaseConfigured() || !supabase) {
-      setIsLoading(false);
       return;
     }
 
@@ -50,18 +49,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for auth state changes (sign in, sign out, token refresh)
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, s) => {
+    } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
       setUser(s?.user ?? null);
       setIsLoading(false);
 
-      // Persist Google refresh token for Drive API access (fire-and-forget)
-      if (s?.provider_refresh_token && s?.user?.id) {
-        supabase!.from("user_google_tokens").upsert(
-          { user_id: s.user.id, refresh_token: s.provider_refresh_token, updated_at: new Date().toISOString() },
-          { onConflict: "user_id" }
-        ).then(({ error }) => {
-          if (error) console.warn("Could not persist Google refresh token:", error.message);
+      if (event === "TOKEN_REFRESHED") return;
+
+      // Persist Google refresh token server-side — the table is not
+      // client-writable (service role only).
+      if (s?.provider_refresh_token && s.access_token) {
+        fetch("/api/google/store-token", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${s.access_token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ refresh_token: s.provider_refresh_token }),
+        }).catch((err: unknown) => {
+          console.warn(
+            "Could not persist Google refresh token:",
+            err instanceof Error ? err.message : err
+          );
         });
       }
     });

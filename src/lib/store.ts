@@ -20,6 +20,7 @@ import {
   createFolder as dbCreateFolder,
   createDocument as dbCreateDocument,
   updateDocument as dbUpdateDocument,
+  StaleWriteError,
   deleteDocument as dbDeleteDocument,
   deleteFolder as dbDeleteFolder,
   renameFolder as dbRenameFolder,
@@ -41,13 +42,28 @@ import {
   ensureQuickNoteParentDocument,
   createQuickNote as dbCreateQuickNote,
   fetchTodayQuickNotes,
-  syncQuickNoteDatabases,
-  syncDailyParentDatabase,
   createMoodboardState as dbCreateMoodboardState,
 } from "./db";
 import { v4 as uuidv4 } from "uuid";
+import { wouldCreateNestingCycle } from "./treeCycle";
 
 const UNDO_LIMIT = 50;
+
+/** Invalidates in-flight `fetchDocument` for a id so a stale refresh cannot clobber a newer cache. */
+const documentFetchGen = new Map<string, number>();
+function nextDocumentFetchGen(id: string): number {
+  const n = (documentFetchGen.get(id) ?? 0) + 1;
+  documentFetchGen.set(id, n);
+  return n;
+}
+
+function isNewerTimestamp(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  const da = Date.parse(a);
+  const db = Date.parse(b);
+  if (Number.isNaN(da) || Number.isNaN(db)) return a > b;
+  return da > db;
+}
 
 type DocLocation = { folderId: string | null; parentDocId: string | null };
 type FolderLocation = { parentId: string | null; parentDocumentId: string | null };
@@ -66,6 +82,8 @@ let redoStack: UndoCommand[] = [];
 let lastFileActionAt = 0;
 
 const FILE_UNDO_PRIORITY_MS = 15_000;
+
+let dashboardInitInflight: Promise<void> | null = null;
 
 export function shouldHandleFileUndo(kind: "undo" | "redo", inEditor: boolean) {
   const stack = kind === "undo" ? undoStack : redoStack;
@@ -239,6 +257,7 @@ interface AppState {
       content: string;
       tags: string[];
       settings: import("./types").NoteSettings;
+      expectedUpdatedAt: string;
     }>
   ) => Promise<void>;
   deleteDocument: (id: string) => Promise<void>;
@@ -508,7 +527,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     set({ openTabs: newTabs });
 
-    // Remove from caches
+    if (docId.startsWith("drive:")) return;
+
     const docCache = new Map(get()._documentCache);
     const annCache = new Map(get()._annotationsCache);
     docCache.delete(docId);
@@ -518,6 +538,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setActiveTab: async (docId: string) => {
     if (get().isGraphOpen) set({ isGraphOpen: false });
+    const existingTab = get().openTabs.find((t) => t.documentId === docId);
+    if (existingTab?.driveFile || docId.startsWith("drive:")) {
+      const { _isNavigating, navHistory, navIndex } = get();
+      if (!_isNavigating) {
+        const trimmed = navHistory.slice(0, navIndex + 1);
+        set({ navHistory: [...trimmed, docId], navIndex: trimmed.length });
+      }
+      set({
+        activeDocumentId: docId,
+        activeDocument: null,
+        activeAnnotation: null,
+      });
+      return;
+    }
     const { _isNavigating, navHistory, navIndex, _documentCache, _annotationsCache } = get();
     // Push to nav history (unless we're navigating via back/forward)
     if (!_isNavigating) {
@@ -528,6 +562,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Instantly swap to cached version if available
     const cached = _documentCache.get(docId);
     const cachedAnnotations = _annotationsCache.get(docId);
+    const fetchGen = nextDocumentFetchGen(docId);
     if (cached) {
       set({
         activeDocumentId: cached.id,
@@ -538,11 +573,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Refresh from DB in the background (don't await)
       fetchDocument(docId).then((dbDoc) => {
         if (!dbDoc) return;
+        if (documentFetchGen.get(docId) !== fetchGen) return;
         const doc = dbDocumentToDocument(dbDoc);
+        const existing = get()._documentCache.get(doc.id);
+        if (isNewerTimestamp(existing?.updatedAt, doc.updatedAt)) return;
+
         const cache = new Map(get()._documentCache);
         cache.set(doc.id, doc);
-        // Only update if still viewing this doc
-        if (get().activeDocumentId === doc.id) {
+        const stillOpen = get().openTabs.length > 0 && get().activeDocumentId === doc.id;
+        if (get().activeDocumentId === doc.id && stillOpen) {
           set({ activeDocument: doc, _documentCache: cache });
         } else {
           set({ _documentCache: cache });
@@ -555,9 +594,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     // No cache — fetch and cache
     const dbDoc = await fetchDocument(docId);
     if (!dbDoc) return;
+    if (documentFetchGen.get(docId) !== fetchGen) return;
     const doc = dbDocumentToDocument(dbDoc);
     const cache = new Map(get()._documentCache);
     cache.set(doc.id, doc);
+    if (get().openTabs.length === 0) {
+      set({ _documentCache: cache });
+      return;
+    }
     set({ activeDocumentId: doc.id, activeDocument: doc, activeAnnotation: null, _documentCache: cache });
     await get().loadAnnotations(doc.id);
   },
@@ -583,7 +627,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     // Persist in background then reconcile with real data
     dbCreateFolder(name, parentId).then((realFolder) => {
-      const docs = get()._dbDocuments;
       const folders = get()._dbFolders.map((f) => f.id === tempFolder.id ? realFolder : f);
       set({ _dbFolders: folders });
       get()._rebuildTree();
@@ -591,28 +634,37 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   renameFolder: async (id: string, name: string) => {
-    // Optimistic: update in local state immediately
     const { _dbFolders } = get();
+    const prev = _dbFolders;
     set({ _dbFolders: _dbFolders.map((f) => f.id === id ? { ...f, name, updated_at: new Date().toISOString() } : f) });
     get()._rebuildTree();
-    dbRenameFolder(id, name).catch(console.error);
+    dbRenameFolder(id, name).catch((err) => {
+      console.error("Failed to rename folder:", err);
+      set({ _dbFolders: prev });
+      get()._rebuildTree();
+    });
   },
 
   deleteFolder: async (id: string) => {
-    // Optimistic: remove from local state
     const { _dbFolders, _dbDocuments } = get();
-    const folderIds = new Set<string>();
-    const collect = (fid: string) => {
-      folderIds.add(fid);
-      _dbFolders.filter((f) => f.parent_id === fid).forEach((f) => collect(f.id));
-    };
-    collect(id);
+    const snapshotFolders = _dbFolders;
+    const snapshotDocs = _dbDocuments;
+    const folder = _dbFolders.find((f) => f.id === id);
+    const hoistParent = folder?.parent_id ?? null;
     set({
-      _dbFolders: _dbFolders.filter((f) => !folderIds.has(f.id)),
-      _dbDocuments: _dbDocuments.filter((d) => !d.folder_id || !folderIds.has(d.folder_id)),
+      _dbFolders: _dbFolders
+        .filter((f) => f.id !== id)
+        .map((f) => (f.parent_id === id ? { ...f, parent_id: hoistParent } : f)),
+      _dbDocuments: _dbDocuments.map((d) =>
+        d.folder_id === id ? { ...d, folder_id: null } : d
+      ),
     });
     get()._rebuildTree();
-    dbDeleteFolder(id).catch(console.error);
+    dbDeleteFolder(id).catch((err) => {
+      console.error("Failed to delete folder:", err);
+      set({ _dbFolders: snapshotFolders, _dbDocuments: snapshotDocs });
+      get()._rebuildTree();
+    });
   },
 
   createDocument: async (folderId: string | null = null, docType: import("./types").DocType = "note") => {
@@ -680,18 +732,36 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   saveDocument: async (id, updates) => {
-    await dbUpdateDocument(id, updates);
+    const { expectedUpdatedAt, ...fields } = updates;
+    let saved;
+    try {
+      saved = await dbUpdateDocument(
+        id,
+        fields,
+        expectedUpdatedAt ? { expectedUpdatedAt } : undefined
+      );
+    } catch (err) {
+      if (err instanceof StaleWriteError) throw err;
+      throw err;
+    }
+
+    const mapped = dbDocumentToDocument(saved);
 
     // Update active document and cache
     const { activeDocument, openTabs, _documentCache } = get();
     if (activeDocument && activeDocument.id === id) {
-      const updated = { ...activeDocument, ...updates };
+      const updated = { ...activeDocument, ...fields, updatedAt: mapped.updatedAt };
+      if (fields.content !== undefined) updated.content = mapped.content;
       const cache = new Map(_documentCache);
       cache.set(id, updated);
       set({ activeDocument: updated, _documentCache: cache });
     } else if (_documentCache.has(id)) {
       const cache = new Map(_documentCache);
-      cache.set(id, { ...(_documentCache.get(id) as Document), ...updates });
+      cache.set(id, {
+        ...(_documentCache.get(id) as Document),
+        ...fields,
+        updatedAt: mapped.updatedAt,
+      });
       set({ _documentCache: cache });
     }
 
@@ -725,12 +795,32 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   deleteDocument: async (id: string) => {
-    get().closeTab(id);
-    // Optimistic: remove from local state
-    const { _dbDocuments: docs } = get();
-    set({ _dbDocuments: docs.filter((d) => d.id !== id) });
+    const { _dbDocuments: docs, _dbFolders: folders } = get();
+    const snapshotDocs = docs;
+    const snapshotFolders = folders;
+    const idsToDelete = new Set<string>();
+    const collect = (docId: string) => {
+      idsToDelete.add(docId);
+      for (const d of docs) {
+        if (d.parent_document_id === docId) collect(d.id);
+      }
+    };
+    collect(id);
+    for (const docId of idsToDelete) get().closeTab(docId);
+    set({
+      _dbDocuments: docs.filter((d) => !idsToDelete.has(d.id)),
+      _dbFolders: folders.map((f) =>
+        f.parent_document_id && idsToDelete.has(f.parent_document_id)
+          ? { ...f, parent_document_id: null }
+          : f
+      ),
+    });
     get()._rebuildTree();
-    dbDeleteDocument(id).catch(console.error);
+    dbDeleteDocument(id).catch((err) => {
+      console.error("Failed to delete document:", err);
+      set({ _dbDocuments: snapshotDocs, _dbFolders: snapshotFolders });
+      get()._rebuildTree();
+    });
   },
 
   moveDocument: async (docId: string, folderId: string | null) => {
@@ -754,11 +844,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     dbMoveDocument(docId, folderId).then(() => {
       get()._rebuildTree();
-    }).catch(console.error);
+    }).catch((err) => {
+      console.error("Failed to move document:", err);
+      set({ _dbDocuments: _dbDocuments, _dbFolders });
+      get()._rebuildTree();
+    });
   },
 
   moveFolder: async (folderId: string, parentId: string | null, parentDocumentId: string | null = null) => {
     const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    if (
+      wouldCreateNestingCycle(_dbFolders, _dbDocuments, {
+        kind: "folder",
+        id: folderId,
+        parentId,
+        parentDocumentId,
+      })
+    ) {
+      console.warn("[store] refused folder move that would create a cycle");
+      return;
+    }
     const prev = _dbFolders.find((f) => f.id === folderId);
     if (prev) {
       recordMove({
@@ -780,13 +885,28 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     dbMoveFolder(folderId, parentId, parentDocumentId).then(() => {
       get()._rebuildTree();
-    }).catch(console.error);
+    }).catch((err) => {
+      console.error("Failed to move folder:", err);
+      set({ _dbFolders, _dbDocuments });
+      get()._rebuildTree();
+    });
   },
 
   setParentDocument: async (docId: string, parentDocId: string | null) => {
     const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
     const prev = _dbDocuments.find((d) => d.id === docId);
     const parentDoc = parentDocId ? _dbDocuments.find((d) => d.id === parentDocId) : null;
+    if (
+      wouldCreateNestingCycle(_dbFolders, _dbDocuments, {
+        kind: "doc",
+        id: docId,
+        parentDocId,
+        folderId: parentDoc ? parentDoc.folder_id : undefined,
+      })
+    ) {
+      console.warn("[store] refused document nest that would create a cycle");
+      return;
+    }
     if (prev) {
       recordMove({
         kind: "doc",
@@ -814,7 +934,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     dbSetParentDocument(docId, parentDocId).then(() => {
       get()._rebuildTree();
-    }).catch(console.error);
+    }).catch((err) => {
+      console.error("Failed to nest document:", err);
+      set({ _dbFolders, _dbDocuments });
+      get()._rebuildTree();
+    });
   },
 
   runUndoable: async (fn) => {
@@ -1140,46 +1264,42 @@ export const useAppStore = create<AppState>((set, get) => ({
   // ── Dashboard actions ──────────────────────────────────────────
 
   initDashboard: async () => {
-    try {
-      // Run todo + daily in parallel, but sequence quick notes to avoid
-      // race condition where multiple parents get created via localStorage
-      const [todoDoc, dailyDoc] = await Promise.all([
-        ensureTodoDocument(),
-        ensureTodayDailyDocument(),
-      ]);
-      const quickNoteParent = await ensureQuickNoteParentDocument();
-      const todayQuickNotes = await fetchTodayQuickNotes();
+    if (dashboardInitInflight) return dashboardInitInflight;
+    dashboardInitInflight = (async () => {
+      try {
+        const [todoDoc, dailyDoc] = await Promise.all([
+          ensureTodoDocument(),
+          ensureTodayDailyDocument(),
+        ]);
+        const quickNoteParent = await ensureQuickNoteParentDocument();
+        const todayQuickNotes = await fetchTodayQuickNotes();
 
-      // Sync database blocks in Daily Documents parent + Quick Notes parent
-      const dailyParentId = dailyDoc.parent_document_id;
-      if (dailyParentId) {
-        await syncDailyParentDatabase(dailyParentId);
+        const todoItems = parseTodoItems(todoDoc.content);
+
+        const quickNotes: QuickNoteItem[] = todayQuickNotes.map((d) => ({
+          docId: d.id,
+          title: d.title,
+          createdAt: d.created_at,
+        }));
+
+        set({
+          todoDocId: todoDoc.id,
+          todoItems,
+          dailyDocId: dailyDoc.id,
+          dailyDocTitle: dailyDoc.title,
+          dailyDocContent: dailyDoc.content,
+          quickNoteParentId: quickNoteParent.id,
+          quickNotes,
+          dashboardReady: true,
+        });
+      } catch (err) {
+        console.error("Failed to initialize dashboard:", err);
+        set({ dashboardReady: true });
       }
-      await syncQuickNoteDatabases(quickNoteParent.id);
-
-      // Parse todo items from the todo document content
-      const todoItems = parseTodoItems(todoDoc.content);
-
-      const quickNotes: QuickNoteItem[] = todayQuickNotes.map((d) => ({
-        docId: d.id,
-        title: d.title,
-        createdAt: d.created_at,
-      }));
-
-      set({
-        todoDocId: todoDoc.id,
-        todoItems,
-        dailyDocId: dailyDoc.id,
-        dailyDocTitle: dailyDoc.title,
-        dailyDocContent: dailyDoc.content,
-        quickNoteParentId: quickNoteParent.id,
-        quickNotes,
-        dashboardReady: true,
-      });
-    } catch (err) {
-      console.error("Failed to initialize dashboard:", err);
-      set({ dashboardReady: true });
-    }
+    })().finally(() => {
+      dashboardInitInflight = null;
+    });
+    return dashboardInitInflight;
   },
 
   addTodo: async (text: string) => {
@@ -1189,26 +1309,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const blockId = uuidv4();
     const newItem: TodoItem = { blockId, text: text.trim(), checked: false };
 
-    // Optimistic UI update — prepend
     set({ todoItems: [newItem, ...todoItems] });
 
-    // Build the new block and persist
     try {
-      const dbDoc = await fetchDocument(todoDocId);
-      if (!dbDoc) return;
-      const blocks = safeParseBlocks(dbDoc.content);
-      const newBlock = makeTodoBlock(blockId, text.trim());
-      blocks.unshift(newBlock);
-      await dbUpdateDocument(todoDocId, { content: JSON.stringify(blocks) });
-
-      // Update cache
-      const cache = new Map(get()._documentCache);
-      if (cache.has(todoDocId)) {
-        cache.set(todoDocId, { ...cache.get(todoDocId)!, content: JSON.stringify(blocks) });
-        set({ _documentCache: cache });
-      }
+      await persistTodoMutation(todoDocId, (blocks) => {
+        if (blocks.some((b) => b.id === blockId)) return;
+        blocks.unshift(makeTodoBlock(blockId, text.trim()));
+      });
     } catch (err) {
       console.error("Failed to add todo:", err);
+      set({ todoItems: get().todoItems.filter((t) => t.blockId !== blockId) });
     }
   },
 
@@ -1216,7 +1326,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { todoDocId, todoItems } = get();
     if (!todoDocId) return;
 
-    // Optimistic UI update
+    const prev = todoItems;
     set({
       todoItems: todoItems.map((t) =>
         t.blockId === blockId ? { ...t, checked: !t.checked } : t
@@ -1224,24 +1334,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
 
     try {
-      const dbDoc = await fetchDocument(todoDocId);
-      if (!dbDoc) return;
-      const blocks = safeParseBlocks(dbDoc.content);
-      const block = blocks.find((b: Record<string, unknown>) => b.id === blockId);
-      if (block && block.props) {
-        (block.props as Record<string, unknown>).checked =
-          !(block.props as Record<string, unknown>).checked;
-      }
-      await dbUpdateDocument(todoDocId, { content: JSON.stringify(blocks) });
-
-      // Update cache
-      const cache = new Map(get()._documentCache);
-      if (cache.has(todoDocId)) {
-        cache.set(todoDocId, { ...cache.get(todoDocId)!, content: JSON.stringify(blocks) });
-        set({ _documentCache: cache });
-      }
+      await persistTodoMutation(todoDocId, (blocks) => {
+        const block = blocks.find((b) => b.id === blockId);
+        if (block && block.props) {
+          const props = block.props as Record<string, unknown>;
+          props.checked = !props.checked;
+        }
+      });
     } catch (err) {
       console.error("Failed to toggle todo:", err);
+      set({ todoItems: prev });
     }
   },
 
@@ -1327,6 +1429,35 @@ function makeTodoBlock(id: string, text: string): Record<string, unknown> {
     content: [{ type: "text", text, styles: {} }],
     children: [],
   };
+}
+
+async function persistTodoMutation(
+  todoDocId: string,
+  mutate: (blocks: Record<string, unknown>[]) => void
+) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const dbDoc = await fetchDocument(todoDocId);
+    if (!dbDoc) return;
+    const blocks = safeParseBlocks(dbDoc.content);
+    mutate(blocks);
+    const content = JSON.stringify(blocks);
+    try {
+      await dbUpdateDocument(
+        todoDocId,
+        { content },
+        { expectedUpdatedAt: dbDoc.updated_at }
+      );
+      const cache = new Map(useAppStore.getState()._documentCache);
+      if (cache.has(todoDocId)) {
+        cache.set(todoDocId, { ...cache.get(todoDocId)!, content });
+        useAppStore.setState({ _documentCache: cache });
+      }
+      return;
+    } catch (err) {
+      if (err instanceof StaleWriteError && attempt < 2) continue;
+      throw err;
+    }
+  }
 }
 
 // ─── Auto-persist state changes to localStorage ───

@@ -4,7 +4,12 @@ A sequenced remediation plan. Phases are ordered by **risk-reduction per unit ef
 dependency (do the cheap safety net before the big refactors). Each item references the authoritative
 finding ID; open the subsystem file for the exact code and fix.
 
-The guiding question that reorders everything: **[is this instance ever reachable by anyone but you?](OPEN-QUESTIONS.md#q1)**
+**Decisions (2026-08-20):** prep for multi-user without treating it as on-fire; **AI search
+privacy is in scope now**; token budget / Groq limiter / shared Redis bucket are deferred. That
+means Phase 0 is still first (RLS, user-scoped search RPCs, authenticated AI routes that filter by
+the caller) but SEC-H4 allowlisting and AI-H3/H4 cost work wait. Phase 1 (data loss) stays next.
+
+The original guiding question: **[is this instance ever reachable by anyone but you?](OPEN-QUESTIONS.md#q1)**
 If yes, Phase 0 is an emergency. If it is genuinely a private single-user instance on a URL nobody
 else has, Phase 0 drops to "important but not on fire" and Phase 1 (data loss) becomes your real
 top priority — you are losing your own edits today.

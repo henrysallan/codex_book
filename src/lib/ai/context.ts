@@ -32,8 +32,7 @@ function estimateTokens(text: string): number {
  * The full document content is provided as context.
  */
 export function assembleTier0Context(
-  document: { title: string; content: string },
-  _query: string
+  document: { title: string; content: string }
 ): { systemPrompt: string; contextTokens: number } {
   // Convert BlockNote JSON to readable text
   const plainText = blocksToPlainText(document.content);

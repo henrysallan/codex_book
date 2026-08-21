@@ -20,6 +20,42 @@ export const ShareCtx = createContext<ShareContext>({
   onPrivateLink: () => {},
 });
 
+function SharePageLinkView(props: {
+  inlineContent: { props: { docId: string; docTitle: string } };
+}) {
+  const { pageLinkMap, onPrivateLink } = useContext(ShareCtx);
+  const docId = props.inlineContent.props.docId;
+  const slug = pageLinkMap[docId];
+
+  return (
+    <span
+      style={{
+        backgroundColor: "rgba(35, 131, 226, 0.14)",
+        color: "rgb(35, 131, 226)",
+        padding: "1px 6px",
+        borderRadius: "3px",
+        cursor: slug ? "pointer" : "default",
+        fontWeight: 500,
+        fontSize: "inherit",
+        lineHeight: "inherit",
+        whiteSpace: "nowrap",
+      }}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (slug) {
+          window.open(`/share/${slug}`, "_blank");
+        } else {
+          onPrivateLink();
+        }
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      ↗ {props.inlineContent.props.docTitle}
+    </span>
+  );
+}
+
 const SharePageLink = createReactInlineContentSpec(
   {
     type: "pageLink",
@@ -30,39 +66,7 @@ const SharePageLink = createReactInlineContentSpec(
     content: "none",
   },
   {
-    render: (props) => {
-      const { pageLinkMap, onPrivateLink } = useContext(ShareCtx);
-      const docId = props.inlineContent.props.docId;
-      const slug = pageLinkMap[docId];
-
-      return (
-        <span
-          style={{
-            backgroundColor: "rgba(35, 131, 226, 0.14)",
-            color: "rgb(35, 131, 226)",
-            padding: "1px 6px",
-            borderRadius: "3px",
-            cursor: slug ? "pointer" : "default",
-            fontWeight: 500,
-            fontSize: "inherit",
-            lineHeight: "inherit",
-            whiteSpace: "nowrap",
-          }}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (slug) {
-              window.open(`/share/${slug}`, "_blank");
-            } else {
-              onPrivateLink();
-            }
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          ↗ {props.inlineContent.props.docTitle}
-        </span>
-      );
-    },
+    render: SharePageLinkView,
   }
 );
 

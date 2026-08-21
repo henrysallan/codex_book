@@ -69,32 +69,11 @@ export async function requireUser(req: Request): Promise<AuthedUser | NextRespon
 }
 
 /**
- * Transitional guard for the `/api/ai/*` routes.
- *
- * Those routes are called both by the cookie-authenticated web client (which
- * does not currently attach a bearer header) and by iOS (which does). Flipping
- * them to hard 401 in one step would break the web app, so this reads
- * `ALLOW_UNAUTHENTICATED_AI` to keep the old behaviour available during
- * rollout.
- *
- * Unset or "false" — the safe default — means a bearer token is required.
- * Set it to "true" in the Vercel environment only while migrating the web
- * client, and remove it once the web client attaches its session token.
+ * Same as `requireUser`. Kept as a named alias so `/api/ai/*` call sites
+ * read as an auth gate rather than an optional check.
  */
-export async function requireUserForAI(req: Request): Promise<AuthedUser | NextResponse | null> {
-  const user = await getUserFromRequest(req);
-  if (user) return user;
-
-  if (process.env.ALLOW_UNAUTHENTICATED_AI === "true") {
-    console.warn(
-      "[serverAuth] Unauthenticated AI request allowed by ALLOW_UNAUTHENTICATED_AI. " +
-      "This spends the owner's LLM credits with no caller identity — unset it once the web client sends a bearer token."
-    );
-    return null;
-  }
-
-  return NextResponse.json(
-    { error: "Not authenticated. Send Authorization: Bearer <supabase access token>." },
-    { status: 401 }
-  );
+export async function requireUserForAI(
+  req: Request
+): Promise<AuthedUser | NextResponse> {
+  return requireUser(req);
 }

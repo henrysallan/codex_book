@@ -45,6 +45,8 @@ import {
 import { useDriveShortcut } from "@/components/DriveFolder";
 import { ImportDialog } from "@/components/ImportDialog";
 import { AnimatedTreeList } from "@/components/AnimatedTreeList";
+import { wouldCreateNestingCycle } from "@/lib/treeCycle";
+import { Modal } from "@/components/Modal";
 
 const DROP_FADE_MS = 180;
 
@@ -178,7 +180,6 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const deleteFolder = useAppStore((s) => s.deleteFolder);
   const moveDocument = useAppStore((s) => s.moveDocument);
   const setParentDocument = useAppStore((s) => s.setParentDocument);
-  const _dbDocuments = useAppStore((s) => s._dbDocuments);
   const _dbFolders = useAppStore((s) => s._dbFolders);
   const toggleChat = useAppStore((s) => s.toggleChat);
   const isChatOpen = useAppStore((s) => s.isChatOpen);
@@ -500,12 +501,13 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   );
 
   const requestDeleteDoc = (id: string) => {
-    const doc = [...rootDocuments, ..._dbDocuments].find((d) => d.id === id);
+    const docs = useAppStore.getState()._dbDocuments;
+    const doc = docs.find((d) => d.id === id);
     setPendingDelete({ type: "doc", id, name: doc?.title || "Untitled" });
   };
 
   const requestDeleteFolder = (id: string) => {
-    const folder = folders.find((f) => f.id === id);
+    const folder = _dbFolders.find((f) => f.id === id);
     setPendingDelete({ type: "folder", id, name: folder?.name || "Untitled" });
   };
 
@@ -570,6 +572,27 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
     const targetIsDoc = over.data.current?.isDocument === true;
     const targetIsRoot = targetId === "root";
 
+    const foldersNow = useAppStore.getState()._dbFolders;
+    const docsNow = useAppStore.getState()._dbDocuments;
+    const docNestWouldCycle = (dId: string, parentDocId: string) =>
+      wouldCreateNestingCycle(foldersNow, docsNow, {
+        kind: "doc",
+        id: dId,
+        parentDocId,
+        folderId: docsNow.find((d) => d.id === parentDocId)?.folder_id ?? null,
+      });
+    const folderNestWouldCycle = (
+      fId: string,
+      parentId: string | null,
+      parentDocumentId: string | null
+    ) =>
+      wouldCreateNestingCycle(foldersNow, docsNow, {
+        kind: "folder",
+        id: fId,
+        parentId,
+        parentDocumentId,
+      });
+
     // Determine if this is a multi-item move
     const activeKey = active.data.current?.isFolder
       ? `folder:${(active.data.current.folder as Folder).id}`
@@ -591,10 +614,12 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
         const parentDocId = targetId.replace(/^doc-drop-/, "");
         for (const fId of folderIds) {
           if (fId === parentDocId) continue;
+          if (folderNestWouldCycle(fId, null, parentDocId)) continue;
           await moveFolderAction(fId, null, parentDocId);
         }
         for (const dId of docIds) {
           if (dId === parentDocId) continue;
+          if (docNestWouldCycle(dId, parentDocId)) continue;
           await setParentDocument(dId, parentDocId);
         }
       } else {
@@ -602,6 +627,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
         const folderId = targetId.replace(/^folder-drop-/, "");
         for (const fId of folderIds) {
           if (fId === folderId) continue;
+          if (folderNestWouldCycle(fId, folderId, null)) continue;
           await moveFolderAction(fId, folderId, null);
         }
         for (const dId of docIds) {
@@ -631,6 +657,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
       if (targetIsDoc) {
         const parentDocId = targetId.replace(/^doc-drop-/, "");
         if (draggedFolder.parentDocumentId === parentDocId) return; // already there
+        if (folderNestWouldCycle(draggedFolder.id, null, parentDocId)) return;
         await moveFolderAction(draggedFolder.id, null, parentDocId);
         return;
       }
@@ -640,15 +667,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
       // Prevent dropping on itself or its current parent
       if (targetFolderId === draggedFolder.id) return;
       if (targetFolderId === draggedFolder.parentId) return;
-      // Prevent dropping on a descendant (would create a cycle)
-      const isDescendant = (folder: Folder, ancestorId: string): boolean => {
-        for (const child of folder.children) {
-          if (child.id === ancestorId) return true;
-          if (isDescendant(child, ancestorId)) return true;
-        }
-        return false;
-      };
-      if (isDescendant(draggedFolder, targetFolderId)) return;
+      if (folderNestWouldCycle(draggedFolder.id, targetFolderId, null)) return;
       await moveFolderAction(draggedFolder.id, targetFolderId, null);
       return;
     }
@@ -660,6 +679,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
       if (docId === parentDocId) return;
       const draggedDoc = active.data.current?.doc as DocumentMeta | undefined;
       if (draggedDoc?.parentDocumentId === parentDocId) return;
+      if (docNestWouldCycle(docId, parentDocId)) return;
       await setParentDocument(docId, parentDocId);
     } else {
       const targetFolderId = targetId.replace(/^folder-drop-/, "");
@@ -1106,14 +1126,13 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
 
       {/* Confirm delete modal */}
       {pendingDelete && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={() => setPendingDelete(null)}
+        <Modal
+          isOpen
+          onClose={() => setPendingDelete(null)}
+          title={`Delete ${pendingDelete.type === "doc" ? "document" : "folder"}`}
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          panelClassName="bg-white rounded-xl shadow-xl w-[360px] overflow-hidden"
         >
-          <div
-            className="bg-white rounded-xl shadow-xl w-[360px] overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
             <div className="px-5 pt-5 pb-3 flex items-start gap-3">
               <div className="p-2 rounded-full bg-red-50 text-red-500 shrink-0 mt-0.5">
                 <AlertTriangle size={18} />
@@ -1125,7 +1144,8 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
                 <p className="text-sm text-muted-foreground mt-1">
                   <strong className="text-foreground">{pendingDelete.name}</strong>{" "}
                   will be permanently deleted.
-                  {pendingDelete.type === "folder" && " Documents inside will be moved to root."}
+                  {pendingDelete.type === "folder" &&
+                    " Documents in this folder will be moved to the top level. Subfolders will be kept."}
                 </p>
               </div>
             </div>
@@ -1143,8 +1163,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
                 Delete
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Right-click context menu */}
@@ -1930,11 +1949,12 @@ function DraggableDocItem({
               onOpen={onOpen}
               onDelete={onDelete}
               onContextMenu={(e) => {
-                e.preventDefault();
-                onContextMenu(e);
+                onContextMenuDoc?.(e, child.id, child.title || "Untitled");
               }}
               renamingItem={renamingItem}
-              onRenameSubmit={onRenameSubmit}
+              onRenameSubmit={(newName) =>
+                onRenameSubmitFolder?.("doc", child.id, newName)
+              }
               onRenameCancel={onRenameCancel}
               expandedDocIds={expandedDocIds}
               onToggleDoc={onToggleDoc}

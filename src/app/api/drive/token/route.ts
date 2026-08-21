@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/serverAuth";
 import { mintGoogleAccessToken } from "@/lib/googleToken";
 
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
 /**
  * POST /api/drive/token
  *

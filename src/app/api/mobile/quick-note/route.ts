@@ -120,7 +120,7 @@ export async function POST(req: NextRequest) {
   let indexed = false;
   if (result.created && body.index !== false) {
     try {
-      const indexResult = await indexDocument(result.document.id);
+      const indexResult = await indexDocument(result.document.id, auth.id);
       indexed = indexResult.status === "indexed";
       if (indexResult.status === "error") {
         console.warn(

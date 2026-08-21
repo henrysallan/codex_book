@@ -35,6 +35,11 @@ export interface DbDocument {
   share_slug: string | null;
   created_at: string;
   updated_at: string;
+  /** Present when selected; never includes the embedding/tsvector. */
+  ai_summary?: string | null;
+  ai_tags?: string[] | null;
+  content_hash?: string | null;
+  index_status?: string | null;
 }
 
 // Client-side types
@@ -116,6 +121,7 @@ export interface DbBacklink {
   id: string;
   source_document_id: string;
   target_document_id: string;
+  user_id?: string;
   created_at: string;
 }
 
@@ -167,6 +173,7 @@ export interface DbAnnotation {
   block_id: string | null;
   highlighted_text: string;
   messages: AnnotationMessage[];
+  summary?: string | null;
   created_at: string;
   updated_at: string;
 }

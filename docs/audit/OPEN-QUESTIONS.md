@@ -1,7 +1,9 @@
 # Open Questions
 
-Decisions that change the remediation and that only you can answer. Grouped by how much they move the
-plan. Each links the findings it gates.
+Decisions that change the remediation and that only you can answer. Grouped by how much they move
+the plan. Each links the findings it gates.
+
+**Answered 2026-08-20.** Unresolved items stay below.
 
 ---
 
@@ -18,17 +20,29 @@ means "anyone who has the Vercel URL." Options as I see them:
   (open Google sign-up) plus per-user filtering in every AI path become blocking, not optional.
 Gates: all of [Security](01-security.md), DATA-C1/C2.
 
+**Answer: (c), without treating it as on-fire.** Prep the isolation now (RLS, user-scoped search,
+authenticated AI routes that actually filter by the caller). Multi-user is not an immediate product
+goal, so allowlisting Google identities (SEC-H4) can wait. AI search privacy is in scope now.
+
 ### Q2. Is multi-user / multi-tenant actually a goal, or is "single-user" permanent?
 This decides whether ~15 findings are "fix the isolation properly" or "acceptable simplification."
 `create_note` assigning ownership from an arbitrary row (SEC-L3/H4), `user_id` being `text 'local'` on
 half the tables (DATA §1), `search_documents` having no user filter — all are fine for permanent
 single-user and wrong for multi-user. Tell me which world we're in and I'll scope accordingly.
 
+**Answer: prep for multi-user; it is not the current concern.** Isolation in search, chunks, and AI
+tools should be real (no "single-tenant" shortcuts). Do not block on tenant UX, billing, or an
+invite/allowlist until we actually share the instance.
+
 ### Q3. What's the deployment/runtime target — Vercel serverless as-is?
 `groqLimiter`'s per-lambda state (AI-H4) and `logUsage` losing writes at teardown (AI-M11) are
 serverless-specific. If you're on Vercel Fluid Compute / a long-lived process, the fixes differ (and
 some of the 30 RPM pain eases). Also decides whether a shared token bucket (Upstash/Redis) is worth
 standing up. Gates: AI-H3, AI-H4, AI-M11.
+
+**Answer: token budget is not a concern right now.** Leave Groq limiter / shared token-bucket /
+denial-of-wallet metering for later. Auth on the AI routes still happens (that's privacy and abuse
+prevention, not cost). Do not stand up Redis/Upstash for this.
 
 ---
 

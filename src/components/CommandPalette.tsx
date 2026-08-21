@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useAppStore } from "@/lib/store";
 import { FileText, FolderIcon, Search } from "lucide-react";
+import { Modal } from "@/components/Modal";
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -10,6 +11,11 @@ interface CommandPaletteProps {
 }
 
 export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
+  if (!isOpen) return null;
+  return <CommandPaletteDialog onClose={onClose} />;
+}
+
+function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -19,39 +25,33 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
   const _dbFolders = useAppStore((s) => s._dbFolders);
   const openDocument = useAppStore((s) => s.openDocument);
 
-  // Build the items list: documents + folders
   const items = useMemo(() => {
-    const docItems = _dbDocuments.map((d) => ({
+    return _dbDocuments.map((d) => ({
       id: d.id,
       type: "document" as const,
       title: d.title,
       subtitle: d.subtitle,
       folderId: d.folder_id,
     }));
-    return docItems;
   }, [_dbDocuments]);
 
-  // Fuzzy filter
   const filtered = useMemo(() => {
     if (!query.trim()) return items;
     const q = query.toLowerCase();
     return items
       .map((item) => {
         const title = item.title.toLowerCase();
-        // Simple fuzzy: check if all chars appear in order
         let score = 0;
         let j = 0;
         for (let i = 0; i < q.length && j < title.length; j++) {
           if (title[j] === q[i]) {
-            score += j === 0 || title[j - 1] === " " ? 10 : 1; // Bonus for word-start
+            score += j === 0 || title[j - 1] === " " ? 10 : 1;
             i++;
           }
         }
-        // Must match all query chars
         const matched = j <= title.length;
         const allMatched =
           q.split("").every((c) => title.includes(c)) && matched;
-        // Also check exact substring for high score
         const substringIdx = title.indexOf(q);
         if (substringIdx >= 0) {
           score += 100 - substringIdx;
@@ -62,7 +62,9 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
       .sort((a, b) => b.score - a.score);
   }, [items, query]);
 
-  // Get folder name for a document
+  const safeIndex =
+    filtered.length === 0 ? 0 : Math.min(selectedIndex, filtered.length - 1);
+
   const getFolderName = useCallback(
     (folderId: string | null) => {
       if (!folderId) return null;
@@ -72,27 +74,17 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
     [_dbFolders]
   );
 
-  // Reset on open
   useEffect(() => {
-    if (isOpen) {
-      setQuery("");
-      setSelectedIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
-  }, [isOpen]);
+    const t = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(t);
+  }, []);
 
-  // Keep selected index in bounds
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [filtered.length]);
-
-  // Scroll selected item into view
   useEffect(() => {
     if (listRef.current) {
-      const el = listRef.current.children[selectedIndex] as HTMLElement;
+      const el = listRef.current.children[safeIndex] as HTMLElement;
       el?.scrollIntoView({ block: "nearest" });
     }
-  }, [selectedIndex]);
+  }, [safeIndex]);
 
   const handleSelect = useCallback(
     (item: (typeof items)[0]) => {
@@ -114,28 +106,24 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
         setSelectedIndex((i) => Math.max(i - 1, 0));
       } else if (e.key === "Enter") {
         e.preventDefault();
-        if (filtered[selectedIndex]) {
-          handleSelect(filtered[selectedIndex]);
+        if (filtered[safeIndex]) {
+          handleSelect(filtered[safeIndex]);
         }
       } else if (e.key === "Escape") {
         onClose();
       }
     },
-    [filtered, selectedIndex, handleSelect, onClose]
+    [filtered, safeIndex, handleSelect, onClose]
   );
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/20"
-        onClick={onClose}
-      />
-
-      {/* Palette */}
-      <div className="relative w-[520px] bg-white rounded-xl shadow-2xl border border-border overflow-hidden">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Search documents"
+      overlayClassName="fixed inset-0 z-50 flex items-start justify-center pt-[20vh] bg-black/20"
+      panelClassName="relative w-[520px] bg-white rounded-xl shadow-2xl border border-border overflow-hidden"
+    >
         {/* Input */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
           <Search size={16} className="text-muted-foreground shrink-0" />
@@ -143,7 +131,10 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
             ref={inputRef}
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelectedIndex(0);
+            }}
             onKeyDown={handleKeyDown}
             placeholder="Search documents by name..."
             className="flex-1 text-sm bg-transparent outline-none placeholder:text-muted"
@@ -166,7 +157,7 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
               <div
                 key={item.id}
                 className={`flex items-center gap-3 px-4 py-2 cursor-pointer transition-colors ${
-                  i === selectedIndex ? "bg-neutral-100" : "hover:bg-neutral-50"
+                  i === safeIndex ? "bg-neutral-100" : "hover:bg-neutral-50"
                 }`}
                 onClick={() => handleSelect(item)}
                 onMouseEnter={() => setSelectedIndex(i)}
@@ -187,7 +178,6 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
             );
           })}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

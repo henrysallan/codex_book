@@ -9,7 +9,6 @@ import { Calendar, ExternalLink } from "lucide-react";
  */
 export function DailyDocumentPreview() {
   const dailyDocId = useAppStore((s) => s.dailyDocId);
-  const dailyDocTitle = useAppStore((s) => s.dailyDocTitle);
   const dailyDocContent = useAppStore((s) => s.dailyDocContent);
   const openDocument = useAppStore((s) => s.openDocument);
 

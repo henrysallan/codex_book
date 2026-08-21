@@ -41,7 +41,9 @@ export function BacklinksPanel() {
     return () => {
       cancelled = true;
     };
-  }, [activeDocument?.id, activeDocument]);
+    // Only refetch when the open document changes, not on every autosave.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDocument?.id]);
 
   if (!activeDocument) return null;
 

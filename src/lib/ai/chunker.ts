@@ -16,10 +16,100 @@ export interface Chunk {
   tokenCount: number;
 }
 
-// Approximate token count: words × 1.3
+// Approximate token count. Word×1.3 undercounts code, CJK, and URLs;
+// take the max of that and chars/4 so a pasted wall of text can't slip
+// past the embedding input limit.
 function estimateTokens(text: string): number {
   const words = text.split(/\s+/).filter(Boolean).length;
-  return Math.ceil(words * 1.3);
+  const wordEst = Math.ceil(words * 1.3);
+  const charEst = Math.ceil(text.length / 4);
+  return Math.max(wordEst, charEst);
+}
+
+function packPieces(
+  pieces: string[],
+  join: string,
+  maxTokens: number,
+  nextStage: SplitStage
+): string[] {
+  const out: string[] = [];
+  let buf: string[] = [];
+  let tokens = 0;
+  const flush = () => {
+    if (buf.length === 0) return;
+    const joined = buf.join(join);
+    buf = [];
+    tokens = 0;
+    if (estimateTokens(joined) > maxTokens) {
+      out.push(...splitToTokenLimit(joined, maxTokens, nextStage));
+    } else {
+      out.push(joined);
+    }
+  };
+  for (const piece of pieces) {
+    const t = estimateTokens(piece);
+    if (t > maxTokens) {
+      flush();
+      out.push(...splitToTokenLimit(piece, maxTokens, nextStage));
+      continue;
+    }
+    if (tokens + t > maxTokens && buf.length > 0) flush();
+    buf.push(piece);
+    tokens += t;
+  }
+  flush();
+  return out;
+}
+
+type SplitStage = "paragraph" | "line" | "sentence" | "char";
+
+/** Split text until every piece is within the embedding-safe token budget. */
+function splitToTokenLimit(
+  text: string,
+  maxTokens: number,
+  stage: SplitStage = "paragraph"
+): string[] {
+  if (!text) return [];
+  if (estimateTokens(text) <= maxTokens) return [text];
+
+  if (stage === "paragraph") {
+    const paragraphs = text.split(/\n\n+/);
+    if (paragraphs.length > 1) return packPieces(paragraphs, "\n\n", maxTokens, "line");
+    return splitToTokenLimit(text, maxTokens, "line");
+  }
+  if (stage === "line") {
+    const lines = text.split("\n");
+    if (lines.length > 1) return packPieces(lines, "\n", maxTokens, "sentence");
+    return splitToTokenLimit(text, maxTokens, "sentence");
+  }
+  if (stage === "sentence") {
+    const sentences = text.split(/(?<=[.!?])\s+/);
+    if (sentences.length > 1) return packPieces(sentences, " ", maxTokens, "char");
+    return splitToTokenLimit(text, maxTokens, "char");
+  }
+
+  const maxChars = Math.max(1, maxTokens * 4);
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += maxChars) {
+    chunks.push(text.slice(i, i + maxChars));
+  }
+  return chunks;
+}
+
+function chunksFromOversizedBlock(
+  text: string,
+  heading: string | null,
+  blockIds: string[]
+): Chunk[] {
+  const parts = splitToTokenLimit(text.trim(), MAX_TOKENS);
+  return parts
+    .filter((p) => p.trim())
+    .map((content, i) => ({
+      content: content.trim(),
+      heading,
+      blockIds: i === 0 ? blockIds : [],
+      tokenCount: estimateTokens(content),
+    }));
 }
 
 // ─── Block text extraction ───
@@ -94,13 +184,6 @@ function collectBlockIds(block: BlockNode): string[] {
 
 function isHeading(block: BlockNode): boolean {
   return block.type === "heading";
-}
-
-function getHeadingLevel(block: BlockNode): number {
-  if (block.type === "heading" && block.props && typeof block.props.level === "number") {
-    return block.props.level as number;
-  }
-  return 999; // not a heading
 }
 
 // ─── Chunking constants ───
@@ -183,15 +266,10 @@ export function blocksToChunks(contentJson: string): Chunk[] {
       pending = emptyPending(currentHeading);
     }
 
-    // If the block itself is huge, make it its own chunk
+    // If the block itself is huge, split it so no piece exceeds the embedder.
     if (blockTokens > MAX_TOKENS) {
       flushPending(pending, result);
-      result.push({
-        content: text.trim(),
-        heading: currentHeading,
-        blockIds: ids,
-        tokenCount: blockTokens,
-      });
+      result.push(...chunksFromOversizedBlock(text, currentHeading, ids));
       pending = emptyPending(currentHeading);
       continue;
     }

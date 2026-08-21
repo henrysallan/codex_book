@@ -180,7 +180,9 @@ function TreeSlot({
   children: ReactNode;
 }) {
   const onPhaseRef = useRef(onPhase);
-  onPhaseRef.current = onPhase;
+  useEffect(() => {
+    onPhaseRef.current = onPhase;
+  });
 
   useEffect(() => {
     const go = (next: Phase | "gone") => onPhaseRef.current(itemKey, next);

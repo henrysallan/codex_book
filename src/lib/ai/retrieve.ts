@@ -62,6 +62,7 @@ export async function embedQuery(query: string): Promise<number[]> {
  */
 export async function retrieveChunks(
   queryEmbedding: number[],
+  userId: string,
   options?: {
     threshold?: number;
     count?: number;
@@ -79,6 +80,7 @@ export async function retrieveChunks(
     query_embedding: JSON.stringify(queryEmbedding),
     match_threshold: threshold,
     match_count: count,
+    p_user_id: userId,
   });
 
   if (error) {
@@ -111,6 +113,7 @@ export async function retrieveChunks(
  */
 export async function retrieveDocuments(
   chunkResults: ChunkResult[],
+  userId: string,
   options?: { maxDocuments?: number }
 ): Promise<DocumentResult[]> {
   const supabase = getServerSupabase();
@@ -138,6 +141,7 @@ export async function retrieveDocuments(
   const { data, error } = await supabase
     .from("documents")
     .select("id, title, content, ai_summary, ai_tags")
+    .eq("user_id", userId)
     .in("id", topDocIds);
 
   if (error) {
@@ -170,7 +174,8 @@ export async function retrieveDocuments(
  * Fetch the full content of a single document by ID.
  */
 export async function fetchDocumentContent(
-  documentId: string
+  documentId: string,
+  userId: string
 ): Promise<{ title: string; content: string } | null> {
   const supabase = getServerSupabase();
   if (!supabase) return null;
@@ -178,6 +183,7 @@ export async function fetchDocumentContent(
   const { data, error } = await supabase
     .from("documents")
     .select("title, content")
+    .eq("user_id", userId)
     .eq("id", documentId)
     .single();
 
@@ -197,7 +203,8 @@ export interface ContextDocument {
  * Fetch full content for a list of document IDs (used in CONTEXT tier).
  */
 export async function fetchContextDocuments(
-  docIds: string[]
+  docIds: string[],
+  userId: string
 ): Promise<ContextDocument[]> {
   const supabase = getServerSupabase();
   if (!supabase) {
@@ -214,6 +221,7 @@ export async function fetchContextDocuments(
   const { data, error } = await supabase
     .from("documents")
     .select("id, title, content")
+    .eq("user_id", userId)
     .in("id", docIds);
 
   if (error) {
@@ -273,7 +281,10 @@ function extractKeywords(query: string): string[] {
  * 3. Folder name ilike — finds docs inside folders matching any keyword
  * 4. AI-tag overlap — finds docs tagged with any keyword
  */
-export async function keywordSearch(query: string): Promise<KeywordDocResult[]> {
+export async function keywordSearch(
+  query: string,
+  userId: string
+): Promise<KeywordDocResult[]> {
   const supabase = getServerSupabase();
   if (!supabase) return [];
 
@@ -287,6 +298,7 @@ export async function keywordSearch(query: string): Promise<KeywordDocResult[]> 
       try {
         const { data, error } = await supabase.rpc("search_documents", {
           search_query: query,
+          p_user_id: userId,
         });
         if (error) {
           console.error("[retrieve] FTS search_documents error:", error);
@@ -319,6 +331,7 @@ export async function keywordSearch(query: string): Promise<KeywordDocResult[]> 
         const { data, error } = await supabase
           .from("documents")
           .select("id, title, folder_id, tags, ai_summary, ai_tags")
+          .eq("user_id", userId)
           .or(orFilter)
           .limit(15);
         if (error || !data) return [];
@@ -348,6 +361,7 @@ export async function keywordSearch(query: string): Promise<KeywordDocResult[]> 
         const { data: folders, error: fErr } = await supabase
           .from("folders")
           .select("id, name")
+          .eq("user_id", userId)
           .or(orFilter)
           .limit(10);
         if (fErr || !folders || folders.length === 0) return [];
@@ -356,6 +370,7 @@ export async function keywordSearch(query: string): Promise<KeywordDocResult[]> 
         const { data: docs, error: dErr } = await supabase
           .from("documents")
           .select("id, title, folder_id, tags, ai_summary, ai_tags")
+          .eq("user_id", userId)
           .in("folder_id", folderIds)
           .limit(25);
         if (dErr || !docs) return [];
@@ -390,6 +405,7 @@ export async function keywordSearch(query: string): Promise<KeywordDocResult[]> 
         const { data, error } = await supabase
           .from("documents")
           .select("id, title, folder_id, tags, ai_summary, ai_tags")
+          .eq("user_id", userId)
           .overlaps("ai_tags", tagVariants)
           .limit(15);
         if (error || !data) return [];
@@ -464,7 +480,8 @@ export function keywordResultsToChunks(
  * Fetch full documents by IDs, returning DocumentResult[] (for Tier 2 merging).
  */
 export async function fetchDocumentsById(
-  docIds: string[]
+  docIds: string[],
+  userId: string
 ): Promise<DocumentResult[]> {
   const supabase = getServerSupabase();
   if (!supabase || docIds.length === 0) return [];
@@ -472,6 +489,7 @@ export async function fetchDocumentsById(
   const { data, error } = await supabase
     .from("documents")
     .select("id, title, content, ai_summary, ai_tags")
+    .eq("user_id", userId)
     .in("id", docIds);
 
   if (error || !data) return [];
@@ -562,7 +580,8 @@ export function rerankChunks(
  * Used to build sourceMap labels for Tier 1 chunk results.
  */
 export async function fetchDocumentTitles(
-  docIds: string[]
+  docIds: string[],
+  userId: string
 ): Promise<Map<string, string>> {
   const supabase = getServerSupabase();
   if (!supabase || docIds.length === 0) return new Map();
@@ -570,6 +589,7 @@ export async function fetchDocumentTitles(
   const { data, error } = await supabase
     .from("documents")
     .select("id, title")
+    .eq("user_id", userId)
     .in("id", docIds);
 
   if (error || !data) return new Map();

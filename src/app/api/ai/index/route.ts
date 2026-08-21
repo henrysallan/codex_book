@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
   // attaches it via authedFetch, trac3 via its Supabase session.
   const auth = await requireUserForAI(req);
   if (auth instanceof NextResponse) return auth;
+  const userId = auth.id;
 
   try {
     const body = await req.json();
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = await indexDocument(documentId);
+    const result = await indexDocument(documentId, userId);
 
     console.log(
       `[/api/ai/index] ${result.status} doc=${documentId} ` +

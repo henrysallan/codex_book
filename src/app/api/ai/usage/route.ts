@@ -6,6 +6,7 @@ import {
 } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 /**
  * GET /api/ai/usage
@@ -20,6 +21,7 @@ export async function GET(req: Request) {
   // attaches it via authedFetch, trac3 via its Supabase session.
   const auth = await requireUserForAI(req);
   if (auth instanceof NextResponse) return auth;
+  const userId = auth.id;
 
   if (!isServerSupabaseConfigured()) {
     return NextResponse.json(
@@ -53,6 +55,7 @@ export async function GET(req: Request) {
     const { data, error } = await supabase
       .from("usage_logs")
       .select("flow, provider, model, input_tokens, output_tokens, created_at")
+      .eq("user_id", userId)
       .gte("created_at", since.toISOString())
       .order("created_at", { ascending: true })
       .range(offset, offset + PAGE_SIZE - 1);

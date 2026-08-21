@@ -105,3 +105,41 @@ export async function mintGoogleAccessToken(userId: string): Promise<GoogleToken
     expiresIn: tokenData.expires_in ?? 3600,
   };
 }
+
+/**
+ * Persist a Google refresh token for `userId`. Client code must never write
+ * `user_google_tokens` — that table is revoked from anon/authenticated.
+ */
+export async function storeGoogleRefreshToken(
+  userId: string,
+  refreshToken: string
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return { ok: false, status: 500, error: "Supabase not configured (service role key required)" };
+  }
+  if (!refreshToken) {
+    return { ok: false, status: 400, error: "Missing refresh token" };
+  }
+
+  const admin = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: { persistSession: false },
+  });
+
+  const { error } = await admin.from("user_google_tokens").upsert(
+    {
+      user_id: String(userId),
+      refresh_token: refreshToken,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" }
+  );
+
+  if (error) {
+    console.error("[googleToken] store failed:", error.message);
+    return { ok: false, status: 500, error: "Could not store Google refresh token" };
+  }
+  return { ok: true };
+}

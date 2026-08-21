@@ -18,6 +18,8 @@ export function MoodboardCanvas({ document: doc }: MoodboardCanvasProps) {
   const lastSavedRef = useRef<string>(""); // JSON of last successfully saved snapshot (dedup)
   const [initialSnapshot, setInitialSnapshot] = useState<TLEditorSnapshot | null | undefined>(undefined);
   const [syncStatus, setSyncStatus] = useState<"synced" | "pending" | "saving" | "error">("synced");
+  const syncStatusRef = useRef(syncStatus);
+  syncStatusRef.current = syncStatus;
 
   // Load saved snapshot on mount
   useEffect(() => {
@@ -109,6 +111,40 @@ export function MoodboardCanvas({ document: doc }: MoodboardCanvasProps) {
           saveMoodboardState(doc.id, payload).catch(console.error);
         }
       }
+    };
+  }, [doc.id]);
+
+  useEffect(() => {
+    const flushIfDirty = () => {
+      if (syncStatusRef.current === "synced") return;
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      const editor = editorRef.current;
+      if (!editor) return;
+      const snapshot = editor.getSnapshot();
+      const payload = { document: snapshot.document };
+      saveMoodboardState(doc.id, payload).catch(console.error);
+    };
+
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (syncStatusRef.current === "synced") return;
+      flushIfDirty();
+      e.preventDefault();
+      e.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("pagehide", flushIfDirty);
+    const onVisibility = () => {
+      if (window.document.visibilityState === "hidden") flushIfDirty();
+    };
+    window.document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("pagehide", flushIfDirty);
+      window.document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [doc.id]);
 

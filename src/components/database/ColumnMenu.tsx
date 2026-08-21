@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { DatabaseColumn, ColumnType } from "@/lib/databaseTypes";
 import { ChevronDown, Trash2, Type, Hash, CheckSquare, Calendar, List } from "lucide-react";

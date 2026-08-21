@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { X, Loader2, BarChart3, DollarSign, Zap, Clock, LogOut } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { Modal } from "@/components/Modal";
 
 import { authedFetch } from "@/lib/apiFetch";
 interface SettingsModalProps {
@@ -94,8 +95,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     if (isOpen) fetchUsage(days);
   }, [isOpen, days, fetchUsage]);
 
-  if (!isOpen) return null;
-
   const dayOptions = [7, 14, 30, 90];
 
   // Compute bar chart data (last N days)
@@ -113,18 +112,19 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       : 1;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Settings"
+      panelClassName="bg-white rounded-xl shadow-xl w-[560px] max-h-[80vh] overflow-hidden flex flex-col"
     >
-      <div className="bg-white rounded-xl shadow-xl w-[560px] max-h-[80vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
           <h2 className="text-base font-semibold text-foreground">Settings</h2>
           <button
+            type="button"
             onClick={onClose}
+            aria-label="Close settings"
             className="text-muted-foreground hover:text-foreground transition-colors"
           >
             <X size={18} />
@@ -420,7 +420,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

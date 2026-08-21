@@ -39,7 +39,8 @@ const anthropic = new Anthropic({
 });
 
 async function resolvePinnedContext(
-  contextItems: ContextItem[] | undefined
+  contextItems: ContextItem[] | undefined,
+  userId: string
 ): Promise<{
   docs: { id: string; title: string; content: string }[];
   blockItems: ContextItem[];
@@ -56,7 +57,7 @@ async function resolvePinnedContext(
   const clientDocs: { id: string; title: string; content: string }[] = [];
   const missingDocIds: string[] = [];
   for (const ci of docItems) {
-    if (ci.content) {
+    if (typeof ci.content === "string" && ci.content.trim() && ci.content.trim() !== "[]") {
       clientDocs.push({
         id: ci.docId,
         title: ci.title ?? "Untitled",
@@ -69,31 +70,50 @@ async function resolvePinnedContext(
 
   let dbDocs: { id: string; title: string; content: string }[] = [];
   if (missingDocIds.length > 0) {
-    dbDocs = await fetchContextDocuments(missingDocIds);
+    dbDocs = await fetchContextDocuments(missingDocIds, userId);
   }
 
   return { docs: [...clientDocs, ...dbDocs], blockItems, docIds };
 }
 
+function isAbortLike(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { name?: string; message?: string };
+  return (
+    e.name === "AbortError" ||
+    e.name === "APIUserAbortError" ||
+    /aborted/i.test(e.message ?? "")
+  );
+}
+
+function enqueueSse(
+  controller: ReadableStreamDefaultController,
+  encoder: TextEncoder,
+  payload: unknown
+) {
+  try {
+    controller.enqueue(
+      encoder.encode(`data: ${JSON.stringify(payload)}\n\n`)
+    );
+  } catch {
+    // Controller already closed (client gone).
+  }
+}
+
 function attachChatStream(
   response: ReturnType<typeof anthropic.messages.stream>,
   controller: ReadableStreamDefaultController,
-  encoder: TextEncoder
+  encoder: TextEncoder,
+  signal?: AbortSignal
 ) {
   response.on("text", (text: string) => {
-    controller.enqueue(
-      encoder.encode(
-        `data: ${JSON.stringify({ type: "text", content: text })}\n\n`
-      )
-    );
+    if (signal?.aborted) return;
+    enqueueSse(controller, encoder, { type: "text", content: text });
   });
   response.on("contentBlock", (block: Anthropic.ContentBlock) => {
+    if (signal?.aborted) return;
     if (block.type === "server_tool_use") {
-      controller.enqueue(
-        encoder.encode(
-          `data: ${JSON.stringify({ type: "tool_use", tool: block.name })}\n\n`
-        )
-      );
+      enqueueSse(controller, encoder, { type: "tool_use", tool: block.name });
     }
   });
 }
@@ -128,6 +148,7 @@ export async function POST(req: NextRequest) {
   // attaches it via authedFetch, trac3 via its Supabase session.
   const auth = await requireUserForAI(req);
   if (auth instanceof NextResponse) return auth;
+  const userId = auth.id;
 
   try {
     const body = await req.json();
@@ -191,7 +212,7 @@ export async function POST(req: NextRequest) {
 
     if (tier === "GENERAL") {
       // Research mode — no automatic retrieval. Pinned notes are still included.
-      const pinned = await resolvePinnedContext(contextItems);
+      const pinned = await resolvePinnedContext(contextItems, userId);
       const ctx = assembleGeneralContext(pinned.docs, pinned.blockItems);
       systemPrompt = ctx.systemPrompt;
       contextTokens = ctx.contextTokens;
@@ -214,9 +235,9 @@ export async function POST(req: NextRequest) {
         // Prefer client-provided content, fall back to DB fetch
         const doc = activeDocumentContent
           ? { title: "Current Document", content: activeDocumentContent }
-          : await fetchDocumentContent(activeDocumentId);
+          : await fetchDocumentContent(activeDocumentId, userId);
         if (doc) {
-          const ctx = assembleTier0Context(doc, effectiveQuery);
+          const ctx = assembleTier0Context(doc);
           systemPrompt = ctx.systemPrompt;
           contextTokens = ctx.contextTokens;
           documentIds = [activeDocumentId];
@@ -230,9 +251,9 @@ export async function POST(req: NextRequest) {
       // Hybrid search: keyword + vector in parallel
       const [embedding, kwResults] = await Promise.all([
         embedQuery(effectiveQuery),
-        keywordSearch(effectiveQuery),
+        keywordSearch(effectiveQuery, userId),
       ]);
-      const vectorChunks = await retrieveChunks(embedding, {
+      const vectorChunks = await retrieveChunks(embedding, userId, {
         threshold: 0.4,
         count: 25,
         maxPerDocument: 5,
@@ -256,7 +277,7 @@ export async function POST(req: NextRequest) {
       // Keyword results already have titles — build a pre-filled title map
       const kwTitleMap = new Map(kwResults.map((kr) => [kr.id, kr.title]));
       const missingTitleIds = allDocIds.filter((id) => !kwTitleMap.has(id));
-      const dbTitles = missingTitleIds.length > 0 ? await fetchDocumentTitles(missingTitleIds) : new Map<string, string>();
+      const dbTitles = missingTitleIds.length > 0 ? await fetchDocumentTitles(missingTitleIds, userId) : new Map<string, string>();
       const titleMap = new Map([...kwTitleMap, ...dbTitles]);
 
       const ctx = assembleTier1Context(allChunks, titleMap);
@@ -270,14 +291,14 @@ export async function POST(req: NextRequest) {
       // Hybrid search: keyword + vector in parallel
       const [embedding, kwResults] = await Promise.all([
         embedQuery(effectiveQuery),
-        keywordSearch(effectiveQuery),
+        keywordSearch(effectiveQuery, userId),
       ]);
-      const vectorChunks = await retrieveChunks(embedding, {
+      const vectorChunks = await retrieveChunks(embedding, userId, {
         threshold: 0.35,
         count: 30,
         maxPerDocument: 6,
       });
-      const vectorDocs = await retrieveDocuments(vectorChunks, { maxDocuments: 4 });
+      const vectorDocs = await retrieveDocuments(vectorChunks, userId, { maxDocuments: 4 });
 
       // Merge keyword-matched docs that vector search missed.
       // Scale the keyword cap so TIER2 always aims for ~7 full docs: when
@@ -293,7 +314,7 @@ export async function POST(req: NextRequest) {
 
       let allDocs = [...vectorDocs];
       if (additionalDocIds.length > 0) {
-        const kwDocs = await fetchDocumentsById(additionalDocIds);
+        const kwDocs = await fetchDocumentsById(additionalDocIds, userId);
         allDocs = [...vectorDocs, ...kwDocs];
       }
 
@@ -309,7 +330,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (tier === "CONTEXT") {
-      const pinned = await resolvePinnedContext(contextItems);
+      const pinned = await resolvePinnedContext(contextItems, userId);
       let docs = pinned.docs;
       console.log(
         `[/api/ai/chat] CONTEXT tier — ${docs.length} docs (${pinned.docs.length} resolved)`,
@@ -319,7 +340,7 @@ export async function POST(req: NextRequest) {
       // Fallback: if still empty, try fetching active document
       if (docs.length === 0 && activeDocumentId) {
         console.log(`[/api/ai/chat] CONTEXT tier — fallback: fetching active doc ${activeDocumentId}`);
-        const fallback = await fetchDocumentContent(activeDocumentId);
+        const fallback = await fetchDocumentContent(activeDocumentId, userId);
         if (fallback) {
           docs = [{ id: activeDocumentId, title: fallback.title, content: fallback.content }];
         }
@@ -363,60 +384,73 @@ export async function POST(req: NextRequest) {
     // Each char ≈ 0.25 tokens. Haiku limit is 50k/min; leave headroom.
     const MAX_INPUT_TOKENS = 35_000;
 
+    const runAbort = new AbortController();
+    const onClientAbort = () => runAbort.abort();
+    if (req.signal.aborted) runAbort.abort();
+    else req.signal.addEventListener("abort", onClientAbort, { once: true });
+
+    let currentAnthropic: ReturnType<typeof anthropic.messages.stream> | null =
+      null;
+
     const stream = new ReadableStream({
       async start(controller) {
-        try {
-          // Send metadata event first (tier, model, referenced docs, sourceMap)
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({
-                type: "meta",
-                tier,
-                model,
-                documentIds,
-                sourceMap,
-              })}\n\n`
-            )
-          );
+        const streamOpts = { signal: runAbort.signal };
 
-          for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-            // Estimate accumulated input size and bail if too large
+        const startModelStream = (
+          params: Anthropic.MessageCreateParamsStreaming
+        ) => {
+          const response = anthropic.messages.stream(params, streamOpts);
+          currentAnthropic = response;
+          attachChatStream(response, controller, encoder, runAbort.signal);
+          return response;
+        };
+
+        const forceFinalAnswer = async (reason: string) => {
+          console.warn(`[/api/ai/chat] Forcing final answer (${reason})`);
+          const response = startModelStream(
+            chatStreamParams(model, systemPrompt, [
+              ...currentMessages,
+              {
+                role: "user",
+                content:
+                  "You have gathered enough information. Please answer the original question now using the tool results you already have. Do not call any more tools.",
+              },
+            ])
+          );
+          const final = await response.finalMessage();
+          inputTokens += final.usage?.input_tokens ?? 0;
+          outputTokens += final.usage?.output_tokens ?? 0;
+        };
+
+        try {
+          enqueueSse(controller, encoder, {
+            type: "meta",
+            tier,
+            model,
+            documentIds,
+            sourceMap,
+          });
+
+          let answered = false;
+          for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            if (runAbort.signal.aborted) break;
+
             if (round > 0) {
               const msgChars = JSON.stringify(currentMessages).length;
               const sysChars = systemPrompt.length;
               const estimatedTokens = Math.ceil((msgChars + sysChars) / 4);
               if (estimatedTokens > MAX_INPUT_TOKENS) {
-                console.warn(
-                  `[/api/ai/chat] Token budget exceeded (~${estimatedTokens} tokens), stopping tool use at round ${round}`
+                await forceFinalAnswer(
+                  `token budget ~${estimatedTokens} at round ${round}`
                 );
-                const response = anthropic.messages.stream(
-                  chatStreamParams(model, systemPrompt, [
-                    ...currentMessages,
-                    {
-                      role: "user",
-                      content:
-                        "You have gathered enough information. Please answer the original question now using the tool results you already have. Do not call any more tools.",
-                    },
-                  ])
-                );
-                attachChatStream(response, controller, encoder);
-                const final = await response.finalMessage();
-                inputTokens += final.usage?.input_tokens ?? 0;
-                outputTokens += final.usage?.output_tokens ?? 0;
+                answered = true;
                 break;
               }
             }
 
-            const allowTools = round < MAX_TOOL_ROUNDS;
-            const response = anthropic.messages.stream(
-              chatStreamParams(
-                model,
-                systemPrompt,
-                currentMessages,
-                allowTools ? CHAT_TOOLS : undefined
-              )
+            const response = startModelStream(
+              chatStreamParams(model, systemPrompt, currentMessages, CHAT_TOOLS)
             );
-            attachChatStream(response, controller, encoder);
 
             const finalMessage = await response.finalMessage();
             inputTokens += finalMessage.usage?.input_tokens ?? 0;
@@ -436,24 +470,26 @@ export async function POST(req: NextRequest) {
             }
 
             // Client tools only — web_search results are already in the message
-            if (finalMessage.stop_reason !== "tool_use") break;
+            if (finalMessage.stop_reason !== "tool_use") {
+              answered = true;
+              break;
+            }
 
             const toolBlocks = finalMessage.content.filter(
               (b): b is Anthropic.ToolUseBlock =>
                 b.type === "tool_use" && b.name !== "web_search"
             );
 
-            if (toolBlocks.length === 0) break;
+            if (toolBlocks.length === 0) {
+              answered = true;
+              break;
+            }
 
             for (const tool of toolBlocks) {
-              controller.enqueue(
-                encoder.encode(
-                  `data: ${JSON.stringify({
-                    type: "tool_use",
-                    tool: tool.name,
-                  })}\n\n`
-                )
-              );
+              enqueueSse(controller, encoder, {
+                type: "tool_use",
+                tool: tool.name,
+              });
             }
 
             const toolResults: Anthropic.Messages.ToolResultBlockParam[] =
@@ -463,7 +499,8 @@ export async function POST(req: NextRequest) {
                   tool_use_id: tool.id,
                   content: await executeTool(
                     tool.name,
-                    tool.input as Record<string, unknown>
+                    tool.input as Record<string, unknown>,
+                    userId
                   ),
                 }))
               );
@@ -475,15 +512,11 @@ export async function POST(req: NextRequest) {
                     toolResults[ti].content as string
                   );
                   if (result.success && result.id) {
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({
-                          type: "doc_created",
-                          docId: result.id,
-                          title: result.title,
-                        })}\n\n`
-                      )
-                    );
+                    enqueueSse(controller, encoder, {
+                      type: "doc_created",
+                      docId: result.id,
+                      title: result.title,
+                    });
                   }
                 } catch {
                   // skip if result isn't parseable
@@ -506,20 +539,27 @@ export async function POST(req: NextRequest) {
             );
           }
 
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({
-                type: "done",
-                tier,
-                model,
-                documentIds,
-                sourceMap,
-              })}\n\n`
-            )
-          );
-          controller.close();
+          // Round exhaustion (or pause_turn on the last round) used to emit
+          // `done` with no synthesis call — a blank reply after 5 tool rounds.
+          if (!answered && !runAbort.signal.aborted) {
+            await forceFinalAnswer("tool-round exhaustion");
+          }
 
-          // Log usage (fire and forget)
+          if (!runAbort.signal.aborted) {
+            enqueueSse(controller, encoder, {
+              type: "done",
+              tier,
+              model,
+              documentIds,
+              sourceMap,
+            });
+          }
+          try {
+            controller.close();
+          } catch {
+            // already closed
+          }
+
           logUsage({
             flow: `chat-${tier.toLowerCase()}`,
             provider: "anthropic",
@@ -527,18 +567,33 @@ export async function POST(req: NextRequest) {
             inputTokens,
             outputTokens,
             documentId: activeDocumentId ?? undefined,
+            userId,
           }).catch(() => {});
         } catch (err) {
+          if (runAbort.signal.aborted || isAbortLike(err)) {
+            try {
+              controller.close();
+            } catch {
+              // already closed
+            }
+            return;
+          }
           console.error("[/api/ai/chat] Stream error:", err);
           const errorMsg =
             err instanceof Error ? err.message : "Unknown error";
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ type: "error", content: errorMsg })}\n\n`
-            )
-          );
-          controller.close();
+          enqueueSse(controller, encoder, { type: "error", content: errorMsg });
+          try {
+            controller.close();
+          } catch {
+            // already closed
+          }
+        } finally {
+          req.signal.removeEventListener("abort", onClientAbort);
         }
+      },
+      cancel() {
+        runAbort.abort();
+        currentAnthropic?.abort();
       },
     });
 

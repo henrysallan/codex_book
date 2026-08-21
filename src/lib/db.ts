@@ -46,6 +46,46 @@ function setLocalDocuments(docs: DbDocument[]) {
   localStorage.setItem(DOCUMENTS_KEY, JSON.stringify(docs));
 }
 
+const PAGE_SIZE = 1000;
+
+async function fetchAllPages<T>(
+  run: (
+    from: number,
+    to: number
+  ) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>
+): Promise<T[]> {
+  const all: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await run(from, to);
+    if (error) throw error;
+    const batch = data ?? [];
+    all.push(...batch);
+    if (batch.length < PAGE_SIZE) break;
+  }
+  return all;
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: string }).code === "23505"
+  );
+}
+
+function parseJsonField<T>(value: unknown, fallback: T): T {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return fallback;
+    }
+  }
+  if (value == null) return fallback;
+  return value as T;
+}
+
 // ============================================================
 // Folder Operations
 // ============================================================
@@ -53,13 +93,15 @@ function setLocalDocuments(docs: DbDocument[]) {
 export async function fetchFolders(): Promise<DbFolder[]> {
   if (!isSupabaseConfigured()) return getLocalFolders();
 
-  const { data, error } = await supabase!
-    .from("folders")
-    .select("id, name, parent_id, parent_document_id, user_id, position, created_at, updated_at")
-    .order("position", { ascending: true });
-
-  if (error) throw error;
-  return data ?? [];
+  return fetchAllPages((from, to) =>
+    supabase!
+      .from("folders")
+      .select(
+        "id, name, parent_id, parent_document_id, user_id, position, created_at, updated_at"
+      )
+      .order("id", { ascending: true })
+      .range(from, to)
+  );
 }
 
 export async function createFolder(
@@ -124,87 +166,47 @@ export async function renameFolder(
 }
 
 export async function deleteFolder(id: string): Promise<void> {
-  // Collect this folder and all descendant folder IDs
+  // Delete the folder only. Direct child folders are reparented to this
+  // folder's parent; documents that lived in this folder go to root.
   if (!isSupabaseConfigured()) {
     const allFolders = getLocalFolders();
-    const folderIds = new Set<string>();
-    const collect = (fid: string) => {
-      folderIds.add(fid);
-      for (const f of allFolders) {
-        if (f.parent_id === fid) collect(f.id);
-      }
-    };
-    collect(id);
-
-    // Delete all documents (and their child docs) in those folders
-    const allDocs = getLocalDocuments();
-    const docIdsToDelete = new Set<string>();
-    const collectDocs = (docId: string) => {
-      docIdsToDelete.add(docId);
-      for (const d of allDocs) {
-        if (d.parent_document_id === docId) collectDocs(d.id);
-      }
-    };
-    for (const d of allDocs) {
-      if (d.folder_id && folderIds.has(d.folder_id)) collectDocs(d.id);
+    const folder = allFolders.find((f) => f.id === id);
+    const hoistParent = folder?.parent_id ?? null;
+    for (const f of allFolders) {
+      if (f.parent_id === id) f.parent_id = hoistParent;
     }
-
-    setLocalDocuments(allDocs.filter((d) => !docIdsToDelete.has(d.id)));
-    setLocalFolders(allFolders.filter((f) => !folderIds.has(f.id)));
+    const allDocs = getLocalDocuments();
+    for (const d of allDocs) {
+      if (d.folder_id === id) d.folder_id = null;
+    }
+    setLocalFolders(allFolders.filter((f) => f.id !== id));
+    setLocalDocuments(allDocs);
     return;
   }
 
-  // Supabase: recursively collect all descendant folder IDs
-  const folderIds = new Set<string>();
-  const collectFolders = async (fid: string) => {
-    folderIds.add(fid);
-    const { data: children } = await supabase!
-      .from("folders")
-      .select("id")
-      .eq("parent_id", fid);
-    if (children) {
-      for (const child of children) await collectFolders(child.id);
-    }
-  };
-  await collectFolders(id);
+  const { data: folder, error: fetchErr } = await supabase!
+    .from("folders")
+    .select("parent_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (fetchErr) throw fetchErr;
 
-  // Delete all documents in those folders (child docs cascade via parent_document_id on delete set null,
-  // but we want to delete them too — collect docs with parent_document_id pointing to docs in these folders)
-  const allFolderIds = [...folderIds];
-  const { data: docsInFolders } = await supabase!
+  const hoistParent = folder?.parent_id ?? null;
+
+  const { error: hoistFoldersErr } = await supabase!
+    .from("folders")
+    .update({ parent_id: hoistParent })
+    .eq("parent_id", id);
+  if (hoistFoldersErr) throw hoistFoldersErr;
+
+  const { error: hoistDocsErr } = await supabase!
     .from("documents")
-    .select("id")
-    .in("folder_id", allFolderIds);
+    .update({ folder_id: null })
+    .eq("folder_id", id);
+  if (hoistDocsErr) throw hoistDocsErr;
 
-  if (docsInFolders && docsInFolders.length > 0) {
-    // Recursively collect child docs (sub-notes nested under folder docs)
-    const docIdsToDelete = new Set<string>(docsInFolders.map((d) => d.id));
-    const collectChildDocs = async (parentIds: string[]) => {
-      const { data: children } = await supabase!
-        .from("documents")
-        .select("id")
-        .in("parent_document_id", parentIds);
-      if (children && children.length > 0) {
-        const newIds = children.map((c) => c.id).filter((cid) => !docIdsToDelete.has(cid));
-        for (const cid of newIds) docIdsToDelete.add(cid);
-        if (newIds.length > 0) await collectChildDocs(newIds);
-      }
-    };
-    await collectChildDocs([...docIdsToDelete]);
-
-    // Delete all collected documents
-    const { error: docErr } = await supabase!
-      .from("documents")
-      .delete()
-      .in("id", [...docIdsToDelete]);
-    if (docErr) throw docErr;
-  }
-
-  // Delete all folders (children first by deleting in reverse order)
-  for (const fid of [...folderIds].reverse()) {
-    const { error } = await supabase!.from("folders").delete().eq("id", fid);
-    if (error) throw error;
-  }
+  const { error } = await supabase!.from("folders").delete().eq("id", id);
+  if (error) throw error;
 }
 
 // ============================================================
@@ -216,17 +218,23 @@ export async function deleteFolder(id: string): Promise<void> {
 const DOCUMENT_META_COLUMNS =
   "id, title, subtitle, folder_id, parent_document_id, user_id, tags, doc_type, position, share_slug, created_at, updated_at";
 
+/** Content for the editor — still excludes embedding, fts, and other AI blobs. */
+const DOCUMENT_CONTENT_COLUMNS = `${DOCUMENT_META_COLUMNS}, content, settings, ai_summary, ai_tags, content_hash, index_status`;
+
 export async function fetchDocuments(): Promise<DbDocument[]> {
   if (!isSupabaseConfigured()) return getLocalDocuments();
 
-  const { data, error } = await supabase!
-    .from("documents")
-    .select(DOCUMENT_META_COLUMNS)
-    .order("position", { ascending: true });
+  const rows = await fetchAllPages<Omit<DbDocument, "content" | "settings">>(
+    (from, to) =>
+      supabase!
+        .from("documents")
+        .select(DOCUMENT_META_COLUMNS)
+        .order("id", { ascending: true })
+        .range(from, to)
+  );
 
-  if (error) throw error;
-  return (data ?? []).map((d) => ({
-    ...(d as Omit<DbDocument, "content" | "settings">),
+  return rows.map((d) => ({
+    ...d,
     content: "[]",
     settings: {},
   })) as DbDocument[];
@@ -239,7 +247,7 @@ export async function fetchDocument(id: string): Promise<DbDocument | null> {
 
   const { data, error } = await supabase!
     .from("documents")
-    .select("*")
+    .select(DOCUMENT_CONTENT_COLUMNS)
     .eq("id", id)
     .single();
 
@@ -255,7 +263,8 @@ export async function createDocument(
   title: string = "Untitled",
   content: string = "[]",
   parentDocumentId: string | null = null,
-  docType: import("./types").DocType = "note"
+  docType: import("./types").DocType = "note",
+  tags: string[] = []
 ): Promise<DbDocument> {
   const now = new Date().toISOString();
   const userId = await getCurrentUserId();
@@ -267,7 +276,7 @@ export async function createDocument(
     parent_document_id: parentDocumentId,
     user_id: userId,
     content,
-    tags: [],
+    tags,
     settings: {},
     doc_type: docType,
     position: 0,
@@ -297,7 +306,7 @@ export async function createDocument(
       doc_type: doc.doc_type,
       position: doc.position,
     })
-    .select()
+    .select(DOCUMENT_CONTENT_COLUMNS)
     .single();
 
   if (error) throw error;
@@ -314,12 +323,20 @@ export async function updateDocument(
     folder_id: string | null;
     settings: import("./types").NoteSettings;
     share_slug: string | null;
-  }>
+  }>,
+  opts?: { expectedUpdatedAt?: string }
 ): Promise<DbDocument> {
   if (!isSupabaseConfigured()) {
     const docs = getLocalDocuments();
     const idx = docs.findIndex((d) => d.id === id);
     if (idx >= 0) {
+      if (
+        opts?.expectedUpdatedAt &&
+        docs[idx].updated_at &&
+        docs[idx].updated_at !== opts.expectedUpdatedAt
+      ) {
+        throw new StaleWriteError(docs[idx]);
+      }
       docs[idx] = { ...docs[idx], ...updates, updated_at: new Date().toISOString() };
       setLocalDocuments(docs);
       return docs[idx];
@@ -327,15 +344,97 @@ export async function updateDocument(
     throw new Error("Document not found");
   }
 
-  const { data, error } = await supabase!
-    .from("documents")
-    .update(updates)
-    .eq("id", id)
-    .select()
-    .single();
+  const payload: Record<string, unknown> = { ...updates };
+  if (updates.content !== undefined) {
+    payload.index_status = "stale";
+  }
+
+  let query = supabase!.from("documents").update(payload).eq("id", id);
+  if (opts?.expectedUpdatedAt) {
+    query = query.eq("updated_at", opts.expectedUpdatedAt);
+  }
+
+  const { data, error } = await query.select(DOCUMENT_CONTENT_COLUMNS).maybeSingle();
 
   if (error) throw error;
+  if (!data) {
+    const { data: current } = await supabase!
+      .from("documents")
+      .select(DOCUMENT_CONTENT_COLUMNS)
+      .eq("id", id)
+      .maybeSingle();
+    if (current) throw new StaleWriteError(current as DbDocument);
+    throw new Error("Document not found");
+  }
   return data;
+}
+
+/** Thrown when a write's expected `updated_at` no longer matches the row. */
+export class StaleWriteError extends Error {
+  current: DbDocument;
+  constructor(current: DbDocument) {
+    super("Document was modified elsewhere");
+    this.name = "StaleWriteError";
+    this.current = current;
+  }
+}
+
+/**
+ * Best-effort PATCH that survives tab close (`keepalive`). Used from
+ * `pagehide` / `beforeunload` when a debounced save has not flushed yet.
+ */
+export function keepalivePatchDocument(
+  id: string,
+  updates: Partial<{
+    title: string;
+    subtitle: string | null;
+    content: string;
+  }>,
+  expectedUpdatedAt?: string | null
+): void {
+  if (!isSupabaseConfigured() || !supabase) {
+    void updateDocument(
+      id,
+      updates,
+      expectedUpdatedAt ? { expectedUpdatedAt } : undefined
+    ).catch(() => {});
+    return;
+  }
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+  void supabase.auth.getSession().then(({ data }) => {
+    const token = data.session?.access_token;
+    if (!token || !url || !anon) {
+      void updateDocument(
+        id,
+        updates,
+        expectedUpdatedAt ? { expectedUpdatedAt } : undefined
+      ).catch(() => {});
+      return;
+    }
+
+    const params = new URLSearchParams();
+    params.set("id", `eq.${id}`);
+    if (expectedUpdatedAt) {
+      params.set("updated_at", `eq.${expectedUpdatedAt}`);
+    }
+
+    const body: Record<string, unknown> = { ...updates };
+    if (updates.content !== undefined) body.index_status = "stale";
+
+    fetch(`${url}/rest/v1/documents?${params.toString()}`, {
+      method: "PATCH",
+      keepalive: true,
+      headers: {
+        apikey: anon,
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  });
 }
 
 export async function deleteDocument(id: string): Promise<void> {
@@ -648,8 +747,12 @@ export async function searchDocuments(query: string): Promise<SearchResult[]> {
   // Supabase full-text search using the RPC function.
   // The RPC returns a server-side `ts_headline` snippet (no full content),
   // so we only egress title/subtitle/tags/snippet per result.
+  // p_user_id is ignored when a user JWT is present (auth.uid() wins);
+  // it is required for service-role callers.
+  const userId = await getCurrentUserId();
   const { data, error } = await supabase!.rpc("search_documents", {
     search_query: query,
+    ...(userId !== "local" ? { p_user_id: userId } : {}),
   });
 
   if (error) throw error;
@@ -711,7 +814,7 @@ export async function fetchAnnotation(id: string): Promise<DbAnnotation | null> 
 
   const { data, error } = await supabase!
     .from("annotations")
-    .select("*")
+    .select("id, document_id, user_id, block_id, highlighted_text, messages, summary, created_at, updated_at")
     .eq("id", id)
     .single();
 
@@ -722,7 +825,7 @@ export async function fetchAnnotation(id: string): Promise<DbAnnotation | null> 
   const row = data as Record<string, unknown>;
   return {
     ...row,
-    messages: (typeof row.messages === "string" ? JSON.parse(row.messages) : row.messages) as AnnotationMessage[],
+    messages: parseJsonField<AnnotationMessage[]>(row.messages, []),
   } as DbAnnotation;
 }
 
@@ -767,7 +870,10 @@ export async function createAnnotation(
   if (error) throw error;
   return {
     ...data,
-    messages: (typeof data.messages === "string" ? JSON.parse(data.messages) : data.messages) as AnnotationMessage[],
+    messages: parseJsonField<AnnotationMessage[]>(
+      (data as { messages?: unknown }).messages,
+      []
+    ),
   } as DbAnnotation;
 }
 
@@ -1439,7 +1545,7 @@ export async function fetchPdfAnnotations(driveFileId: string): Promise<PdfAnnot
 
   if (error) throw error;
   return (data ?? []).map((row: Record<string, unknown>) => {
-    const messages = typeof row.messages === "string" ? JSON.parse(row.messages) : row.messages;
+    const messages = parseJsonField<AnnotationMessage[]>(row.messages, []);
     return dbPdfAnnotationToClient({ ...row, messages } as DbPdfAnnotation);
   });
 }
@@ -1495,7 +1601,10 @@ export async function createPdfAnnotation(opts: {
     .single();
 
   if (error) throw error;
-  const messages = typeof data.messages === "string" ? JSON.parse(data.messages) : data.messages;
+  const messages = parseJsonField<AnnotationMessage[]>(
+    (data as { messages?: unknown }).messages,
+    []
+  );
   return dbPdfAnnotationToClient({ ...data, messages } as DbPdfAnnotation);
 }
 
@@ -1539,6 +1648,49 @@ export async function deletePdfAnnotation(id: string): Promise<void> {
 // System Documents (Todo, Daily)
 // ============================================================
 
+async function fetchSystemDocByType(
+  docType: import("./types").DocType
+): Promise<DbDocument | null> {
+  const { data, error } = await supabase!
+    .from("documents")
+    .select(DOCUMENT_CONTENT_COLUMNS)
+    .eq("doc_type", docType)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as DbDocument | null) ?? null;
+}
+
+async function createOrGetSystemDoc(
+  insert: () => Promise<DbDocument>,
+  reload: () => Promise<DbDocument | null>
+): Promise<DbDocument> {
+  try {
+    return await insert();
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const existing = await reload();
+    if (existing) return existing;
+    throw err;
+  }
+}
+
+async function writeContentIfChanged(id: string, content: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    await updateDocument(id, { content });
+    return;
+  }
+  const { data, error } = await supabase!
+    .from("documents")
+    .select("content")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  if (data?.content === content) return;
+  await updateDocument(id, { content });
+}
+
 /**
  * Find or create the singleton todo document.
  * Uses doc_type = "todo" to locate it.
@@ -1551,16 +1703,12 @@ export async function ensureTodoDocument(): Promise<DbDocument> {
     return createDocument(null, "Todo", "[]", null, "todo");
   }
 
-  const { data, error } = await supabase!
-    .from("documents")
-    .select("*")
-    .eq("doc_type", "todo")
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (data) return data;
-  return createDocument(null, "Todo", "[]", null, "todo");
+  const existing = await fetchSystemDocByType("todo");
+  if (existing) return existing;
+  return createOrGetSystemDoc(
+    () => createDocument(null, "Todo", "[]", null, "todo"),
+    () => fetchSystemDocByType("todo")
+  );
 }
 
 /**
@@ -1575,16 +1723,12 @@ export async function ensureDailyParentDocument(): Promise<DbDocument> {
     return createDocument(null, "Daily Documents", "[]", null, "daily_parent");
   }
 
-  const { data, error } = await supabase!
-    .from("documents")
-    .select("*")
-    .eq("doc_type", "daily_parent")
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (data) return data;
-  return createDocument(null, "Daily Documents", "[]", null, "daily_parent");
+  const existing = await fetchSystemDocByType("daily_parent");
+  if (existing) return existing;
+  return createOrGetSystemDoc(
+    () => createDocument(null, "Daily Documents", "[]", null, "daily_parent"),
+    () => fetchSystemDocByType("daily_parent")
+  );
 }
 
 /**
@@ -1628,22 +1772,27 @@ export async function ensureTodayDailyDocument(): Promise<DbDocument> {
       },
     ]);
 
-    const newDoc = await createDocument(null, dateStr, placeholderContent, parent.id, "daily");
+    const newDoc = await createDocument(null, dateStr, placeholderContent, parent.id, "daily", [dateTag]);
     await syncDailyParentDatabase(parent.id);
     return newDoc;
   }
 
   // Supabase path
-  const { data: dailyMatches, error } = await supabase!
-    .from("documents")
-    .select("*")
-    .eq("doc_type", "daily")
-    .overlaps("tags", lookupTags);
+  const loadTodayDaily = async (): Promise<DbDocument | null> => {
+    const { data: dailyMatches, error } = await supabase!
+      .from("documents")
+      .select(DOCUMENT_CONTENT_COLUMNS)
+      .eq("doc_type", "daily")
+      .overlaps("tags", lookupTags);
+    if (error) throw error;
+    return (
+      (dailyMatches?.find((d) => d.tags?.includes(dateTag)) as DbDocument | undefined) ??
+      (dailyMatches?.[0] as DbDocument | undefined) ??
+      null
+    );
+  };
 
-  if (error) throw error;
-  // Prefer the locally-tagged container when both exist.
-  const daily =
-    dailyMatches?.find((d) => d.tags?.includes(dateTag)) ?? dailyMatches?.[0];
+  const daily = await loadTodayDaily();
   if (daily) return daily;
 
   const placeholderContent = JSON.stringify([
@@ -1663,14 +1812,21 @@ export async function ensureTodayDailyDocument(): Promise<DbDocument> {
     },
   ]);
 
-  const doc = await createDocument(null, dateStr, placeholderContent, parent.id, "daily");
-
-  // Tag with the date so we can find it again
-  await updateDocument(doc.id, { tags: [dateTag] });
-  doc.tags = [dateTag];
-
-  await syncDailyParentDatabase(parent.id);
-  return doc;
+  return createOrGetSystemDoc(
+    async () => {
+      const doc = await createDocument(
+        null,
+        dateStr,
+        placeholderContent,
+        parent.id,
+        "daily",
+        [dateTag]
+      );
+      await syncDailyParentDatabase(parent.id);
+      return doc;
+    },
+    loadTodayDaily
+  );
 }
 
 // ── Daily Parent database helpers ───────────────────────────
@@ -1733,20 +1889,28 @@ export async function syncDailyParentDatabase(parentId: string): Promise<void> {
   }
 
   // Supabase path
-  const { data: dailyDocs } = await supabase!
-    .from("documents")
-    .select("id, title, tags, created_at")
-    .eq("parent_document_id", parentId)
-    .eq("doc_type", "daily")
-    .order("created_at", { ascending: false });
+  const dailyDocs = await fetchAllPages<{
+    id: string;
+    title: string;
+    tags: string[];
+    created_at: string;
+  }>((from, to) =>
+    supabase!
+      .from("documents")
+      .select("id, title, tags, created_at")
+      .eq("parent_document_id", parentId)
+      .eq("doc_type", "daily")
+      .order("created_at", { ascending: false })
+      .range(from, to)
+  );
 
-  const items = (dailyDocs ?? []).map((d: { id: string; title: string; tags: string[] }) => ({
+  const items = dailyDocs.map((d) => ({
     id: d.id,
     title: d.title,
     dateTag: d.tags.find((t: string) => /^\d{4}-\d{2}-\d{2}$/.test(t)) ?? "",
   }));
 
-  await updateDocument(parentId, { content: buildDailyParentDatabaseContent(items) });
+  await writeContentIfChanged(parentId, buildDailyParentDatabaseContent(items));
 }
 
 // ============================================================
@@ -1872,53 +2036,71 @@ export async function syncQuickNoteDatabases(
     return;
   }
 
-  // Supabase path — collect day containers
-  const { data: dayDocs } = await supabase!
+  // Supabase path — collect day containers, then all their children in one query
+  const { data: dayDocs, error: dayErr } = await supabase!
     .from("documents")
     .select("id, title, tags, created_at")
     .eq("parent_document_id", parentId)
     .eq("doc_type", "note")
     .order("created_at", { ascending: false });
+  if (dayErr) throw dayErr;
 
-  const dayContainers = (dayDocs ?? []).map((d: { id: string; title: string; tags: string[]; created_at: string }) => ({
-    id: d.id,
-    title: d.title,
-    dateTag: d.tags.find((t: string) => /^\d{4}-\d{2}-\d{2}$/.test(t)) ?? "",
-  }));
+  const dayContainers = (dayDocs ?? []).map(
+    (d: { id: string; title: string; tags: string[]; created_at: string }) => ({
+      id: d.id,
+      title: d.title,
+      dateTag: d.tags.find((t: string) => /^\d{4}-\d{2}-\d{2}$/.test(t)) ?? "",
+    })
+  );
 
-  // Collect ALL individual quick notes across all day containers for the parent DB
+  if (dayContainers.length === 0) {
+    await writeContentIfChanged(parentId, buildParentDatabaseContent([]));
+    return;
+  }
+
+  const children = await fetchAllPages<{
+    id: string;
+    title: string;
+    parent_document_id: string | null;
+    created_at: string;
+  }>((from, to) =>
+    supabase!
+      .from("documents")
+      .select("id, title, parent_document_id, created_at")
+      .in(
+        "parent_document_id",
+        dayContainers.map((c) => c.id)
+      )
+      .order("created_at", { ascending: false })
+      .range(from, to)
+  );
+
+  const childrenByParent = new Map<string, { id: string; title: string }[]>();
+  for (const child of children) {
+    if (!child.parent_document_id) continue;
+    const list = childrenByParent.get(child.parent_document_id) ?? [];
+    list.push({ id: child.id, title: child.title });
+    childrenByParent.set(child.parent_document_id, list);
+  }
+
   const allNotes: { id: string; title: string; dateTag: string }[] = [];
   for (const dc of dayContainers) {
-    const { data: childDocs } = await supabase!
-      .from("documents")
-      .select("id, title")
-      .eq("parent_document_id", dc.id)
-      .order("created_at", { ascending: false });
-
-    for (const child of (childDocs ?? []) as { id: string; title: string }[]) {
+    for (const child of childrenByParent.get(dc.id) ?? []) {
       allNotes.push({ id: child.id, title: child.title, dateTag: dc.dateTag });
     }
   }
 
-  await updateDocument(parentId, { content: buildParentDatabaseContent(allNotes) });
+  await writeContentIfChanged(parentId, buildParentDatabaseContent(allNotes));
 
-  // Update day container databases
   const containersToSync = dayContainerId
     ? dayContainers.filter((c) => c.id === dayContainerId)
     : dayContainers;
 
   for (const container of containersToSync) {
-    const { data: childDocs } = await supabase!
-      .from("documents")
-      .select("id, title")
-      .eq("parent_document_id", container.id)
-      .order("created_at", { ascending: false });
-
-    const children = (childDocs ?? []).map((d: { id: string; title: string }) => ({
-      id: d.id,
-      title: d.title,
-    }));
-    await updateDocument(container.id, { content: buildDayDatabaseContent(children) });
+    await writeContentIfChanged(
+      container.id,
+      buildDayDatabaseContent(childrenByParent.get(container.id) ?? [])
+    );
   }
 }
 
@@ -1940,20 +2122,18 @@ export async function ensureQuickNoteParentDocument(): Promise<DbDocument> {
     return doc;
   }
 
-  const { data, error } = await supabase!
-    .from("documents")
-    .select("*")
-    .eq("doc_type", "quick_note_parent")
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (data) return data;
-
-  return createDocument(
-    null, "Quick Notes",
-    buildParentDatabaseContent([]),
-    null, "quick_note_parent"
+  const existing = await fetchSystemDocByType("quick_note_parent");
+  if (existing) return existing;
+  return createOrGetSystemDoc(
+    () =>
+      createDocument(
+        null,
+        "Quick Notes",
+        buildParentDatabaseContent([]),
+        null,
+        "quick_note_parent"
+      ),
+    () => fetchSystemDocByType("quick_note_parent")
   );
 }
 
@@ -1982,37 +2162,45 @@ export async function ensureTodayQuickNoteContainer(): Promise<DbDocument> {
     const doc = await createDocument(
       null, dateStr,
       buildDayDatabaseContent([]),
-      parent.id, "note"
+      parent.id, "note",
+      [dateTag]
     );
-    await updateDocument(doc.id, { tags: [dateTag] });
-    doc.tags = [dateTag];
-    // Sync parent DB to include the new day container
     await syncQuickNoteDatabases(parent.id);
     return doc;
   }
 
-  // Supabase path
-  const { data: containerMatches, error } = await supabase!
-    .from("documents")
-    .select("*")
-    .eq("parent_document_id", parent.id)
-    .overlaps("tags", lookupTags);
+  const loadTodayContainer = async (): Promise<DbDocument | null> => {
+    const { data: containerMatches, error } = await supabase!
+      .from("documents")
+      .select(DOCUMENT_CONTENT_COLUMNS)
+      .eq("parent_document_id", parent.id)
+      .overlaps("tags", lookupTags);
+    if (error) throw error;
+    return (
+      (containerMatches?.find((d) => d.tags?.includes(dateTag)) as DbDocument | undefined) ??
+      (containerMatches?.[0] as DbDocument | undefined) ??
+      null
+    );
+  };
 
-  if (error) throw error;
-  const container =
-    containerMatches?.find((d) => d.tags?.includes(dateTag)) ?? containerMatches?.[0];
+  const container = await loadTodayContainer();
   if (container) return container;
 
-  const doc = await createDocument(
-    null, dateStr,
-    buildDayDatabaseContent([]),
-    parent.id, "note"
+  return createOrGetSystemDoc(
+    async () => {
+      const doc = await createDocument(
+        null,
+        dateStr,
+        buildDayDatabaseContent([]),
+        parent.id,
+        "note",
+        [dateTag]
+      );
+      await syncQuickNoteDatabases(parent.id);
+      return doc;
+    },
+    loadTodayContainer
   );
-  await updateDocument(doc.id, { tags: [dateTag] });
-  doc.tags = [dateTag];
-  // Sync parent DB to include the new day container
-  await syncQuickNoteDatabases(parent.id);
-  return doc;
 }
 
 /**
@@ -2061,25 +2249,29 @@ export async function fetchTodayQuickNotes(): Promise<DbDocument[]> {
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
-  // Supabase: find today's container then its children
-  const { data: containerRows } = await supabase!
-    .from("documents")
-    .select("id, tags")
-    .eq("parent_document_id", parent.id)
-    .overlaps("tags", lookupTags);
+  const containerRows = await fetchAllPages<{ id: string; tags: string[] }>(
+    (from, to) =>
+      supabase!
+        .from("documents")
+        .select("id, tags")
+        .eq("parent_document_id", parent.id)
+        .overlaps("tags", lookupTags)
+        .order("id", { ascending: true })
+        .range(from, to)
+  );
 
   const containerData =
-    containerRows?.find((d) => d.tags?.includes(dateTag)) ?? containerRows?.[0];
+    containerRows.find((d) => d.tags?.includes(dateTag)) ?? containerRows[0];
   if (!containerData) return [];
 
-  const { data, error } = await supabase!
-    .from("documents")
-    .select("*")
-    .eq("parent_document_id", containerData.id)
-    .order("created_at", { ascending: false });
-
-  if (error) throw error;
-  return data ?? [];
+  return fetchAllPages<DbDocument>((from, to) =>
+    supabase!
+      .from("documents")
+      .select(DOCUMENT_CONTENT_COLUMNS)
+      .eq("parent_document_id", containerData.id)
+      .order("created_at", { ascending: false })
+      .range(from, to)
+  );
 }
 
 // ============================================================

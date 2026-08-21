@@ -5,10 +5,51 @@
 
 import { getServerSupabase } from "@/lib/supabaseServer";
 import { blocksToPlainText } from "./context";
-import { embedQuery } from "./retrieve";
 import type Anthropic from "@anthropic-ai/sdk";
 
 import { markdownToBlockNote } from "../markdownToBlocks";
+import { runAsUser, uid } from "./userScope";
+
+const TABLES_WITH_USER_ID = new Set([
+  "documents",
+  "folders",
+  "backlinks",
+  "annotations",
+  "pdf_annotations",
+  "attachments",
+  "usage_logs",
+  "moodboard_assets",
+  "graph_layouts",
+]);
+
+/**
+ * Service-role client with user_id forced onto every select, and p_user_id
+ * onto every RPC. The service role bypasses RLS; this is the actual isolation.
+ */
+function getToolDb() {
+  const supabase = getServerSupabase();
+  if (!supabase) return null;
+  const userId = uid();
+
+  const scoped = {
+    rpc(fn: string, params: Record<string, unknown> = {}) {
+      return supabase.rpc(fn, { ...params, p_user_id: userId });
+    },
+    from(table: string) {
+      const builder = supabase.from(table);
+      if (!TABLES_WITH_USER_ID.has(table)) return builder;
+      const origSelect = builder.select.bind(builder);
+      builder.select = ((columns?: string, options?: object) =>
+        origSelect(columns as never, options as never).eq(
+          "user_id",
+          userId
+        )) as typeof builder.select;
+      return builder;
+    },
+  };
+
+  return scoped as unknown as NonNullable<ReturnType<typeof getServerSupabase>>;
+}
 /**
  * Hard cap on any single tool result to prevent token budget blowout.
  * ~4000 chars ≈ ~1000 tokens. Each tool round may invoke multiple tools,
@@ -577,7 +618,7 @@ export const CHAT_TOOLS: Anthropic.Messages.ToolUnion[] = [
 async function createFolderPathResolver(): Promise<
   (folderId: string | null) => string
 > {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return () => "/";
 
   const { data: folders } = await supabase
@@ -611,7 +652,7 @@ async function searchNotes(input: {
   query: string;
   limit?: number;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const limit = input.limit ?? 10;
@@ -664,7 +705,7 @@ async function searchNotes(input: {
 async function getDocumentInfo(input: {
   documentId: string;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const { data: doc, error } = await supabase
@@ -709,7 +750,7 @@ async function getDocumentInfo(input: {
 async function readDocumentContent(input: {
   documentId: string;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const { data: doc, error } = await supabase
@@ -736,7 +777,7 @@ async function listFolderContents(input: {
   folderName?: string;
   recursive?: boolean;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   let folderId = input.folderId;
@@ -854,7 +895,7 @@ async function listFolderContents(input: {
 }
 
 async function getBacklinks(input: { documentId: string }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   // Fetch incoming and outgoing backlinks in parallel
@@ -914,7 +955,7 @@ async function searchByDate(input: {
   sort?: string;
   limit?: number;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const limit = input.limit ?? 20;
@@ -958,7 +999,7 @@ async function getWritingStats(input: {
   from?: string;
   to?: string;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   let query = supabase.from("documents").select("created_at");
@@ -999,7 +1040,7 @@ async function searchByTags(input: {
   matchAll?: boolean;
   limit?: number;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const limit = input.limit ?? 20;
@@ -1039,7 +1080,7 @@ async function searchByTags(input: {
 }
 
 async function getFolderTree(input: { parentId?: string }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const [foldersRes, docsRes] = await Promise.all([
@@ -1099,7 +1140,7 @@ async function countDocuments(input: {
   from?: string;
   to?: string;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   let query = supabase
@@ -1131,7 +1172,7 @@ async function getDocumentLengths(input: {
   folderName?: string;
   recursive?: boolean;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   let docIds: string[] | null = input.documentIds ?? null;
@@ -1247,7 +1288,7 @@ async function getRecentDocuments(input: {
   sortBy?: string;
   limit?: number;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const sortField = input.sortBy === "created_at" ? "created_at" : "updated_at";
@@ -1283,7 +1324,7 @@ async function getRecentDocuments(input: {
 async function getDocumentChildren(input: {
   parentDocumentId: string;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   // Get child documents + child folders (folders can also nest under docs)
@@ -1326,7 +1367,7 @@ async function getDocumentChildren(input: {
 }
 
 async function getAllTags(input: { minCount?: number }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const { data, error } = await supabase
@@ -1355,7 +1396,7 @@ async function getAllTags(input: { minCount?: number }): Promise<string> {
 async function batchGetDocumentInfo(input: {
   documentIds: string[];
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const { data, error } = await supabase
@@ -1392,21 +1433,24 @@ async function batchGetDocumentInfo(input: {
 async function getChunkSummaries(input: {
   documentId: string;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
-  const [docRes, chunksRes] = await Promise.all([
-    supabase.from("documents").select("id, title").eq("id", input.documentId).single(),
-    supabase
-      .from("document_chunks")
-      .select("chunk_index, heading, summary, tags, token_count")
-      .eq("document_id", input.documentId)
-      .order("chunk_index"),
-  ]);
+  const { data: doc } = await supabase
+    .from("documents")
+    .select("id, title")
+    .eq("id", input.documentId)
+    .maybeSingle();
 
-  if (!docRes.data) return JSON.stringify({ error: "Document not found" });
+  if (!doc) return JSON.stringify({ error: "Document not found" });
 
-  const chunks = ((chunksRes.data ?? []) as {
+  const { data: chunkRows } = await supabase
+    .from("document_chunks")
+    .select("chunk_index, heading, summary, tags, token_count")
+    .eq("document_id", input.documentId)
+    .order("chunk_index");
+
+  const chunks = ((chunkRows ?? []) as {
     chunk_index: number; heading: string | null;
     summary: string | null; tags: string[]; token_count: number;
   }[]).map(c => ({
@@ -1418,7 +1462,7 @@ async function getChunkSummaries(input: {
   }));
 
   return JSON.stringify({
-    document: { id: docRes.data.id, title: docRes.data.title },
+    document: { id: doc.id, title: doc.title },
     chunkCount: chunks.length,
     totalTokens: chunks.reduce((sum, c) => sum + c.tokenCount, 0),
     chunks,
@@ -1430,7 +1474,7 @@ async function findSimilarDocuments(input: {
   limit?: number;
   threshold?: number;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   // Get source document's embedding
@@ -1494,7 +1538,7 @@ async function searchDocumentContent(input: {
   query: string;
   limit?: number;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const limit = input.limit ?? 15;
@@ -1526,7 +1570,7 @@ async function getFolderInfo(input: {
   folderId?: string;
   folderName?: string;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   let folderId = input.folderId;
@@ -1570,7 +1614,7 @@ async function getFolderInfo(input: {
 }
 
 async function getOrphanDocuments(input: { limit?: number }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const limit = input.limit ?? 20;
@@ -1623,7 +1667,7 @@ async function getOrphanDocuments(input: { limit?: number }): Promise<string> {
 }
 
 async function getAnnotations(input: { documentId: string }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   // Fetch document annotations and check for linked PDF
@@ -1683,7 +1727,7 @@ async function getAnnotations(input: { documentId: string }): Promise<string> {
 }
 
 async function getDailyNote(input: { date: string }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const d = new Date(input.date + "T00:00:00Z");
@@ -1766,7 +1810,7 @@ async function getDailyNote(input: { date: string }): Promise<string> {
 }
 
 async function getTagGraph(input: { minCooccurrence?: number }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const { data, error } = await supabase
@@ -1804,7 +1848,7 @@ async function getTagGraph(input: { minCooccurrence?: number }): Promise<string>
 async function getDocumentHierarchy(input: {
   documentId: string;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   // Get the document
@@ -1868,7 +1912,7 @@ async function getDocumentHierarchy(input: {
 async function compareDocuments(input: {
   documentIds: string[];
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   if (input.documentIds.length < 2)
@@ -1918,7 +1962,7 @@ async function getRecentlyModified(input: {
   limit?: number;
   from?: string;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
   const limit = input.limit ?? 15;
@@ -1962,18 +2006,11 @@ async function createNote(input: {
   tags?: string[];
   folderName?: string;
 }): Promise<string> {
-  const supabase = getServerSupabase();
+  const supabase = getToolDb();
   if (!supabase) return JSON.stringify({ error: "Database not available" });
 
-  // Resolve the owner user_id from an existing document so the new note
-  // belongs to the same user (service-role key has no auth.uid()).
-  let userId = "local";
-  const { data: sample } = await supabase
-    .from("documents")
-    .select("user_id")
-    .limit(1)
-    .single();
-  if (sample) userId = (sample as { user_id: string }).user_id;
+  // Owner is the verified JWT user — never copy user_id from an arbitrary row.
+  const userId = uid();
 
   // Resolve folder by name or path if provided
   let folderId: string | null = null;
@@ -2073,6 +2110,14 @@ async function createNote(input: {
  * All errors are caught and returned as JSON to Claude (never throws).
  */
 export async function executeTool(
+  name: string,
+  input: Record<string, unknown>,
+  userId: string
+): Promise<string> {
+  return runAsUser(userId, () => executeToolInner(name, input));
+}
+
+async function executeToolInner(
   name: string,
   input: Record<string, unknown>
 ): Promise<string> {

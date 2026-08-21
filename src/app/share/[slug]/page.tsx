@@ -31,7 +31,7 @@ async function getShareData(slug: string): Promise<ShareData | null> {
   }
 
   // Find all pageLink references and check which are also shared
-  let pageLinkMap: Record<string, string | null> = {};
+  const pageLinkMap: Record<string, string | null> = {};
   const pageLinkDocIds = extractPageLinkDocIds(doc.content);
   if (pageLinkDocIds.length > 0) {
     const { data: linked } = await supabase

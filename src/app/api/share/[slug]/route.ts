@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSupabase } from "@/lib/supabaseServer";
 
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
 /**
  * GET /api/share/[slug]
  * Public endpoint — returns the shared document's content and metadata.
@@ -41,7 +44,7 @@ export async function GET(
   const pageLinkDocIds = extractPageLinkDocIds(doc.content);
 
   // 3. For each referenced page, check if it also has a share_slug
-  let pageLinkMap: Record<string, string | null> = {};
+  const pageLinkMap: Record<string, string | null> = {};
   if (pageLinkDocIds.length > 0) {
     const { data: linked } = await supabase
       .from("documents")

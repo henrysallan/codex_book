@@ -31,24 +31,26 @@ export default function Home() {
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [chatWidth, setChatWidth] = useState(320);
-  const isResizing = useRef(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   // Drag-to-resize handler for chat panel
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    isResizing.current = true;
-    const startX = e.clientX;
-    const startWidth = chatWidth;
+    resizeRef.current = { startX: e.clientX, startWidth: chatWidth };
+    setIsResizing(true);
 
     const onMouseMove = (ev: MouseEvent) => {
-      if (!isResizing.current) return;
-      const delta = startX - ev.clientX;
-      const newWidth = Math.min(Math.max(startWidth + delta, 240), 600);
+      const start = resizeRef.current;
+      if (!start) return;
+      const delta = start.startX - ev.clientX;
+      const newWidth = Math.min(Math.max(start.startWidth + delta, 240), 600);
       setChatWidth(newWidth);
     };
 
     const onMouseUp = () => {
-      isResizing.current = false;
+      resizeRef.current = null;
+      setIsResizing(false);
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       document.body.style.cursor = "";
@@ -64,10 +66,11 @@ export default function Home() {
   // Only initialize store once auth is resolved
   useEffect(() => {
     if (authLoading) return;
-    // If Supabase is configured, require a signed-in user before loading data
     if (isSupabaseConfigured() && !user) return;
     initialize();
-  }, [initialize, authLoading, user]);
+    // Intentionally keyed on user id so TOKEN_REFRESHED does not refetch the tree.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialize, authLoading, user?.id]);
 
   // Global keyboard shortcuts
   const handleKeyDown = useCallback(
@@ -140,7 +143,7 @@ export default function Home() {
         style={{
           width: isChatOpen ? `${chatWidth + 16}px` : "0px",
           opacity: isChatOpen ? 1 : 0,
-          transition: isResizing.current
+          transition: isResizing
             ? "none"
             : "width 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease-out",
         }}

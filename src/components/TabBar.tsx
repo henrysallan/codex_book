@@ -153,6 +153,7 @@ export function TabBar() {
                 e.stopPropagation();
                 closeTab(tab.documentId);
               }}
+              aria-label={`Close ${tab.title}`}
               className="ml-1 p-0.5 rounded-full hover:bg-black/10 text-muted-foreground hover:text-foreground transition-colors"
             >
               <X size={10} />

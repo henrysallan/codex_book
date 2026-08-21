@@ -22,7 +22,11 @@ export const DatabaseBlock = createReactBlockSpec(
           >
             <DatabaseTable
               block={props.block}
-              editor={props.editor}
+              editor={{
+                updateBlock: (_block, update) => {
+                  props.editor.updateBlock(props.block, update);
+                },
+              }}
             />
           </div>
         );
