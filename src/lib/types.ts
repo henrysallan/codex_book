@@ -124,6 +124,19 @@ export interface Backlink {
   documentTitle: string;
 }
 
+/** Persisted force-layout positions. Regenerated when graph topology changes. */
+export interface GraphLayout {
+  topologyHash: string;
+  positions: Record<string, [number, number]>;
+}
+
+export interface GraphCamera {
+  tx: number;
+  ty: number;
+  k: number;
+  hash: string;
+}
+
 // Context items for AI chat
 export type ContextItem =
   | { type: "document"; docId: string; title: string }

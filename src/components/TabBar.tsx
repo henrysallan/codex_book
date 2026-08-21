@@ -96,7 +96,14 @@ export function TabBar() {
 
       {/* Home pill */}
       <div
-        onClick={() => useAppStore.setState({ activeDocumentId: null, activeDocument: null, activeAnnotation: null })}
+        onClick={() =>
+          useAppStore.setState({
+            activeDocumentId: null,
+            activeDocument: null,
+            activeAnnotation: null,
+            isGraphOpen: false,
+          })
+        }
         className={`flex items-center justify-center px-3 py-1 rounded-full border cursor-pointer transition-colors shrink-0 bg-blue-50 ${
           isHome
             ? "border-blue-200"

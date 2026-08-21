@@ -49,6 +49,7 @@ const TOOL_LABELS: Record<string, string> = {
   compare_documents: "Comparing documents…",
   get_recently_modified: "Finding recent edits…",
   create_note: "Creating note…",
+  web_search: "Searching the web…",
 };
 
 interface ChatMeta {
@@ -108,7 +109,7 @@ export function ChatPanel() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const models = ["Auto", "Claude Haiku", "Claude Sonnet"];
+  const models = ["Auto", "Claude Haiku", "Claude Sonnet", "Claude Opus"];
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -298,7 +299,7 @@ export function ChatPanel() {
         abortRef.current = null;
       }
     },
-    [isStreaming, chatMessages, activeDocument, contextItems, addChatMessage, initialize, _dbDocuments, _dbFolders]
+    [isStreaming, chatMessages, activeDocument, contextItems, addChatMessage, initialize, _dbDocuments, _dbFolders, researchMode, model]
   );
 
   const handleSend = () => {
@@ -565,7 +566,7 @@ export function ChatPanel() {
                     ? "bg-blue-50 text-blue-600 border border-blue-200"
                     : "text-muted-foreground hover:text-foreground hover:bg-black/[0.04]"
                 }`}
-                title={researchMode ? "Research mode: answering from general knowledge" : "Notes mode: searching your knowledge base"}
+                title={researchMode ? "Research mode: general knowledge + web search. Pinned notes are still included." : "Notes mode: searching your knowledge base. Web search is also available."}
               >
                 {researchMode ? <Globe size={12} /> : <BookOpen size={12} />}
                 {researchMode ? "Research" : "Notes"}

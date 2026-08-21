@@ -64,3 +64,28 @@ export function dayContainerTitle(date: Date = new Date()): string {
     day: "numeric",
   });
 }
+
+const DATE_TAG = /^\d{4}-\d{2}-\d{2}$/;
+
+export function isDateTag(value: string): boolean {
+  return DATE_TAG.test(value);
+}
+
+/**
+ * Title for a client-supplied `YYYY-MM-DD` tag.
+ *
+ * Vercel runs in UTC, so `dayContainerTitle(capturedAt)` would use UTC calendar
+ * parts and disagree with the phone's local day. Building the title from the
+ * tag itself keeps the folder name on the same civil date the device sent.
+ */
+export function titleFromDateTag(tag: string): string {
+  const [year, month, day] = tag.split("-").map(Number);
+  const noonUtc = new Date(Date.UTC(year, month - 1, day, 12));
+  return noonUtc.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}

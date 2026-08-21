@@ -318,3 +318,50 @@ body {
 .textLayer ::selection {
   background: rgba(59, 130, 246, 0.3);
 }
+
+/* Sidebar tree: add = open gap then fade in; remove = fade out, hold gap, then collapse */
+.tree-anim {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 220ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+.tree-anim[data-phase="enter"],
+.tree-anim[data-phase="exit-collapse"] {
+  grid-template-rows: 0fr;
+}
+.tree-anim-clip {
+  min-height: 0;
+  overflow: visible;
+}
+.tree-anim[data-phase="enter"] .tree-anim-clip,
+.tree-anim[data-phase="enter-open"] .tree-anim-clip,
+.tree-anim[data-phase="exit-collapse"] .tree-anim-clip {
+  overflow: hidden;
+}
+.tree-anim-inner {
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+.tree-anim[data-phase="enter"] .tree-anim-inner,
+.tree-anim[data-phase="enter-open"] .tree-anim-inner {
+  opacity: 0;
+}
+.tree-anim[data-phase="exit-fade"] .tree-anim-inner,
+.tree-anim[data-phase="exit-hold"] .tree-anim-inner,
+.tree-anim[data-phase="exit-collapse"] .tree-anim-inner {
+  opacity: 0;
+  pointer-events: none;
+}
+.tree-anim[data-phase="enter"] .tree-anim-inner,
+.tree-anim[data-phase="enter-open"] .tree-anim-inner {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tree-anim {
+    transition: none;
+  }
+  .tree-anim-inner {
+    transition: none;
+  }
+}

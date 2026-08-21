@@ -14,7 +14,9 @@ import {
   useSensors,
   useDroppable,
   useDraggable,
+  type DropAnimation,
 } from "@dnd-kit/core";
+import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronRight,
   ChevronLeft,
@@ -33,8 +35,136 @@ import {
   CalendarDays,
   Zap,
   LayoutGrid,
+  Upload,
+  HardDrive,
+  ListFilter,
+  ArrowUp,
+  ArrowDown,
+  Waypoints,
 } from "lucide-react";
-import { DriveFolder } from "@/components/DriveFolder";
+import { useDriveShortcut } from "@/components/DriveFolder";
+import { ImportDialog } from "@/components/ImportDialog";
+import { AnimatedTreeList } from "@/components/AnimatedTreeList";
+
+const DROP_FADE_MS = 180;
+
+const fadeInPlaceDropAnimation: DropAnimation = {
+  duration: DROP_FADE_MS,
+  easing: "ease",
+  keyframes: ({ transform }) => [
+    { opacity: 1, transform: CSS.Transform.toString(transform.initial) },
+    { opacity: 0, transform: CSS.Transform.toString(transform.initial) },
+  ],
+  sideEffects: null,
+};
+
+const PINNED_DOC_ORDER: DocType[] = ["daily_parent", "todo", "quick_note_parent"];
+
+const SORT_MODES = [
+  { value: "manual", label: "Manual" },
+  { value: "name", label: "Name" },
+  { value: "created", label: "Created" },
+  { value: "updated", label: "Modified" },
+  { value: "kind", label: "Kind" },
+] as const;
+
+type SidebarSortMode = (typeof SORT_MODES)[number]["value"];
+type SidebarSortDir = "asc" | "desc";
+type FolderDateLookup = Map<string, { created: string; updated: string }>;
+
+const DOC_KIND_ORDER: Record<DocType, number> = {
+  note: 0,
+  moodboard: 1,
+  daily: 2,
+  daily_parent: 3,
+  todo: 4,
+  quick_note_parent: 5,
+};
+
+function compareNames(a: string, b: string) {
+  return a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+}
+
+function compareFolder(
+  a: Folder,
+  b: Folder,
+  mode: SidebarSortMode,
+  dir: SidebarSortDir,
+  dates: FolderDateLookup
+) {
+  const mul = dir === "asc" ? 1 : -1;
+  let primary = 0;
+  if (mode === "manual") {
+    primary = a.position - b.position;
+  } else if (mode === "created") {
+    primary = (dates.get(a.id)?.created ?? "").localeCompare(dates.get(b.id)?.created ?? "");
+  } else if (mode === "updated") {
+    primary = (dates.get(a.id)?.updated ?? "").localeCompare(dates.get(b.id)?.updated ?? "");
+  } else {
+    primary = compareNames(a.name, b.name);
+  }
+  if (primary !== 0) return mul * primary;
+  return mul * compareNames(a.name, b.name);
+}
+
+function compareDoc(a: DocumentMeta, b: DocumentMeta, mode: SidebarSortMode, dir: SidebarSortDir) {
+  const mul = dir === "asc" ? 1 : -1;
+  let primary = 0;
+  if (mode === "manual") {
+    primary = a.position - b.position;
+  } else if (mode === "created") {
+    primary = a.createdAt.localeCompare(b.createdAt);
+  } else if (mode === "updated") {
+    primary = a.updatedAt.localeCompare(b.updatedAt);
+  } else if (mode === "kind") {
+    primary = (DOC_KIND_ORDER[a.docType] ?? 99) - (DOC_KIND_ORDER[b.docType] ?? 99);
+  } else {
+    primary = compareNames(a.title || "Untitled", b.title || "Untitled");
+  }
+  if (primary !== 0) return mul * primary;
+  return mul * compareNames(a.title || "Untitled", b.title || "Untitled");
+}
+
+function sortFolderList(
+  folders: Folder[],
+  mode: SidebarSortMode,
+  dir: SidebarSortDir,
+  dates: FolderDateLookup
+): Folder[] {
+  return [...folders]
+    .sort((a, b) => compareFolder(a, b, mode, dir, dates))
+    .map((f) => ({
+      ...f,
+      children: sortFolderList(f.children, mode, dir, dates),
+      documents: sortDocList(f.documents, mode, dir, dates),
+    }));
+}
+
+function sortDocList(
+  docs: DocumentMeta[],
+  mode: SidebarSortMode,
+  dir: SidebarSortDir,
+  dates: FolderDateLookup
+): DocumentMeta[] {
+  return [...docs]
+    .sort((a, b) => compareDoc(a, b, mode, dir))
+    .map((d) => ({
+      ...d,
+      childFolders: d.childFolders
+        ? sortFolderList(d.childFolders, mode, dir, dates)
+        : undefined,
+      childDocuments: d.childDocuments
+        ? sortDocList(d.childDocuments, mode, dir, dates)
+        : undefined,
+    }));
+}
+
+function pinnedDocIcon(docType: DocType) {
+  if (docType === "todo") return <CheckSquare size={14} />;
+  if (docType === "daily_parent") return <CalendarDays size={14} />;
+  if (docType === "quick_note_parent") return <Zap size={14} />;
+  return <FileText size={14} />;
+}
 
 export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const folders = useAppStore((s) => s.folders);
@@ -52,15 +182,21 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const _dbFolders = useAppStore((s) => s._dbFolders);
   const toggleChat = useAppStore((s) => s.toggleChat);
   const isChatOpen = useAppStore((s) => s.isChatOpen);
+  const toggleGraph = useAppStore((s) => s.toggleGraph);
+  const isGraphOpen = useAppStore((s) => s.isGraphOpen);
   const addContextItem = useAppStore((s) => s.addContextItem);
   const renameFolder = useAppStore((s) => s.renameFolder);
   const moveFolderAction = useAppStore((s) => s.moveFolder);
   const saveDocument = useAppStore((s) => s.saveDocument);
+  const runUndoable = useAppStore((s) => s.runUndoable);
+  const { visible: driveVisible, openDrive } = useDriveShortcut();
 
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [draggingDoc, setDraggingDoc] = useState<DocumentMeta | null>(null);
   const [draggingFolder, setDraggingFolder] = useState<Folder | null>(null);
+  const clearDragGhostTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [expandedDocIds, setExpandedDocIds] = useState<Set<string>>(new Set());
 
   // Multi-select state
@@ -86,13 +222,27 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   } | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [focusedFolderId, setFocusedFolderId] = useState<string | null>(null);
+  const [sortMode, setSortMode] = useState<SidebarSortMode>("manual");
+  const [sortDir, setSortDir] = useState<SidebarSortDir>("asc");
 
   useEffect(() => {
     try {
       setIsCollapsed(localStorage.getItem("cortex:sidebarCollapsed") === "true");
+      const mode = localStorage.getItem("cortex:sidebarSortMode");
+      const dir = localStorage.getItem("cortex:sidebarSortDir");
+      if (mode === "manual" || mode === "name" || mode === "created" || mode === "updated" || mode === "kind") {
+        setSortMode(mode);
+      }
+      if (dir === "asc" || dir === "desc") setSortDir(dir);
     } catch {
       // localStorage unavailable
     }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (clearDragGhostTimeout.current) clearTimeout(clearDragGhostTimeout.current);
+    };
   }, []);
 
   const toggleCollapsed = useCallback(() => {
@@ -160,6 +310,51 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
     return findInDocs(rootDocuments) ?? null;
   }, [focusedFolderId, folders, rootDocuments]);
 
+  const folderDates = useMemo(() => {
+    const map: FolderDateLookup = new Map();
+    for (const f of _dbFolders) {
+      map.set(f.id, { created: f.created_at, updated: f.updated_at });
+    }
+    return map;
+  }, [_dbFolders]);
+
+  const sortedFolders = useMemo(
+    () => sortFolderList(folders, sortMode, sortDir, folderDates),
+    [folders, sortMode, sortDir, folderDates]
+  );
+
+  const sortedRootDocuments = useMemo(
+    () => sortDocList(rootDocuments, sortMode, sortDir, folderDates),
+    [rootDocuments, sortMode, sortDir, folderDates]
+  );
+
+  const sortedFocusedFolder = useMemo(() => {
+    if (!focusedFolder) return null;
+    return {
+      ...focusedFolder,
+      children: sortFolderList(focusedFolder.children, sortMode, sortDir, folderDates),
+      documents: sortDocList(focusedFolder.documents, sortMode, sortDir, folderDates),
+    };
+  }, [focusedFolder, sortMode, sortDir, folderDates]);
+
+  const handleSortModeChange = useCallback((mode: SidebarSortMode) => {
+    setSortMode(mode);
+    try {
+      localStorage.setItem("cortex:sidebarSortMode", mode);
+    } catch {
+      // localStorage unavailable
+    }
+  }, []);
+
+  const handleSortDirChange = useCallback((dir: SidebarSortDir) => {
+    setSortDir(dir);
+    try {
+      localStorage.setItem("cortex:sidebarSortDir", dir);
+    } catch {
+      // localStorage unavailable
+    }
+  }, []);
+
   const focusedFolderPath = useMemo(() => {
     if (!focusedFolderId) return [];
     const path: { id: string; name: string }[] = [];
@@ -173,6 +368,14 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
     }
     return path;
   }, [focusedFolderId, _dbFolders]);
+
+  const pinnedDocs = useMemo(
+    () =>
+      PINNED_DOC_ORDER.map((type) =>
+        rootDocuments.find((d) => d.docType === type)
+      ).filter((d): d is DocumentMeta => d != null),
+    [rootDocuments]
+  );
 
   useEffect(() => {
     if (!focusedFolderId) return;
@@ -240,25 +443,20 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
       }
     };
 
-    // Pinned system docs
-    rootDocuments
-      .filter((d) => d.docType === "todo" || d.docType === "daily_parent" || d.docType === "quick_note_parent")
-      .forEach(walkDoc);
-
     // Folders + root docs (or focused folder contents)
-    if (focusedFolderId && focusedFolder) {
-      focusedFolder.children.forEach((f) => items.push(`folder:${f.id}`));
-      focusedFolder.documents.forEach(walkDoc);
+    if (focusedFolderId && sortedFocusedFolder) {
+      sortedFocusedFolder.children.forEach((f) => items.push(`folder:${f.id}`));
+      sortedFocusedFolder.documents.forEach(walkDoc);
     } else {
-      folders.forEach(walkFolder);
+      sortedFolders.forEach(walkFolder);
 
-      rootDocuments
+      sortedRootDocuments
         .filter((d) => d.docType !== "todo" && d.docType !== "daily_parent" && d.docType !== "quick_note_parent")
         .forEach(walkDoc);
     }
 
     return items;
-  }, [folders, rootDocuments, expandedDocIds, focusedFolderId, focusedFolder]);
+  }, [sortedFolders, sortedRootDocuments, expandedDocIds, focusedFolderId, sortedFocusedFolder]);
 
   /**
    * Unified click handler for sidebar items.
@@ -336,6 +534,10 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   };
 
   const handleDragStart = (event: DragStartEvent) => {
+    if (clearDragGhostTimeout.current) {
+      clearTimeout(clearDragGhostTimeout.current);
+      clearDragGhostTimeout.current = null;
+    }
     const doc = event.active.data.current?.doc as DocumentMeta | undefined;
     const folder = event.active.data.current?.folder as Folder | undefined;
     setDraggingDoc(doc ?? null);
@@ -353,11 +555,17 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
-    setDraggingDoc(null);
-    setDraggingFolder(null);
+    if (clearDragGhostTimeout.current) clearTimeout(clearDragGhostTimeout.current);
+    clearDragGhostTimeout.current = setTimeout(() => {
+      setDraggingDoc(null);
+      setDraggingFolder(null);
+      clearDragGhostTimeout.current = null;
+    }, DROP_FADE_MS);
+
     const { active, over } = event;
     if (!over) return;
 
+    await runUndoable(async () => {
     const targetId = over.id as string;
     const targetIsDoc = over.data.current?.isDocument === true;
     const targetIsRoot = targetId === "root";
@@ -468,6 +676,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
     }
 
     setSelectedIds(new Set());
+    });
   };
 
   return (
@@ -510,6 +719,19 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
               >
                 <FolderIcon size={14} />
               </IconTooltipButton>
+              <IconTooltipButton
+                label="Import"
+                onClick={() => setIsImportOpen(true)}
+              >
+                <Upload size={14} />
+              </IconTooltipButton>
+              <IconTooltipButton
+                label="Graph"
+                onClick={toggleGraph}
+                active={isGraphOpen}
+              >
+                <Waypoints size={14} />
+              </IconTooltipButton>
             </div>
             <div className="flex-1" />
             <div className="flex flex-col items-center gap-1">
@@ -544,78 +766,47 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
           </div>
         </div>
 
+        {(pinnedDocs.length > 0 || driveVisible) && (
+          <div className="flex items-center gap-1 px-2 pb-1">
+            {pinnedDocs.map((doc) => (
+              <IconTooltipButton
+                key={doc.id}
+                label={doc.title || "Untitled"}
+                onClick={() => openDocument(doc.id)}
+                active={activeDocumentId === doc.id}
+                framed
+              >
+                {pinnedDocIcon(doc.docType)}
+              </IconTooltipButton>
+            ))}
+            {driveVisible && (
+              <IconTooltipButton
+                label="Google Drive"
+                onClick={() => { void openDrive(); }}
+                active={!!activeDocumentId?.startsWith("drive:")}
+                framed
+              >
+                <HardDrive size={14} />
+              </IconTooltipButton>
+            )}
+          </div>
+        )}
+
         {/* File Tree */}
         <RootDropZone>
           <div className="flex-1 overflow-y-auto px-1 py-1">
-            {/* Pinned system documents (Todo, Daily Documents, Quick Notes) */}
-            {rootDocuments
-              .filter((d) => d.docType === "todo" || d.docType === "daily_parent" || d.docType === "quick_note_parent")
-              .map((doc) => (
-              <DraggableDocItem
-                key={doc.id}
-                doc={doc}
-                depth={0}
-                isActive={activeDocumentId === doc.id}
-                onOpen={openDocument}
-                onDelete={requestDeleteDoc}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setContextMenu({ x: e.clientX, y: e.clientY, type: "doc", id: doc.id, name: doc.title || "Untitled" });
-                }}
-                renamingItem={renamingItem}
-                onRenameSubmit={async (newName) => {
-                  await saveDocument(doc.id, { title: newName });
-                  setRenamingItem(null);
-                }}
-                onRenameCancel={() => setRenamingItem(null)}
-                expandedDocIds={expandedDocIds}
-                onToggleDoc={(id) => {
-                  setExpandedDocIds((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(id)) next.delete(id);
-                    else next.add(id);
-                    return next;
-                  });
-                }}
-                activeDocumentId={activeDocumentId}
-                onToggleFolder={toggleFolder}
-                onCreateDoc={createDocument}
-                onDeleteFolder={requestDeleteFolder}
-                onContextMenuFolder={(e, id, name) => {
-                  e.preventDefault();
-                  setContextMenu({ x: e.clientX, y: e.clientY, type: "folder", id, name });
-                }}
-                onContextMenuDoc={(e, id, name) => {
-                  e.preventDefault();
-                  setContextMenu({ x: e.clientX, y: e.clientY, type: "doc", id, name });
-                }}
-                onRenameSubmitFolder={async (type, id, newName) => {
-                  if (type === "folder") await renameFolder(id, newName);
-                  else await saveDocument(id, { title: newName });
-                  setRenamingItem(null);
-                }}
-                selectedIds={selectedIds}
-                onItemClick={handleItemClick}
-                onEnterFolder={enterFolder}
-              />
-            ))}
-
-            {/* Google Drive synced folder */}
-            <DriveFolder />
-
-            {/* Divider between pinned items and the rest */}
-            {(rootDocuments.some((d) => d.docType === "todo" || d.docType === "daily_parent" || d.docType === "quick_note_parent")) && (
-              <div className="mx-2 my-1.5 border-t border-border/60" />
-            )}
-
             <SidebarFolderBreadcrumb
               path={focusedFolderPath}
               onNavigate={setFocusedFolderId}
+              sortMode={sortMode}
+              sortDir={sortDir}
+              onSortModeChange={handleSortModeChange}
+              onSortDirChange={handleSortDirChange}
             />
 
-            {focusedFolderId && focusedFolder ? (
-              <>
-                {focusedFolder.children.map((folder) => (
+            {focusedFolderId && sortedFocusedFolder ? (
+              <AnimatedTreeList key={sortedFocusedFolder.id}>
+                {sortedFocusedFolder.children.map((folder) => (
                   <FolderItem
                     key={folder.id}
                     folder={folder}
@@ -656,7 +847,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
                     onEnterFolder={enterFolder}
                   />
                 ))}
-                {focusedFolder.documents.map((doc) => (
+                {sortedFocusedFolder.documents.map((doc) => (
                   <DraggableDocItem
                     key={doc.id}
                     doc={doc}
@@ -705,11 +896,11 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
                     onEnterFolder={enterFolder}
                   />
                 ))}
-              </>
+              </AnimatedTreeList>
             ) : (
-              <>
+              <AnimatedTreeList key="root">
             {/* Folders */}
-            {folders.map((folder) => (
+            {sortedFolders.map((folder) => (
               <FolderItem
                 key={folder.id}
                 folder={folder}
@@ -751,7 +942,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
             ))}
 
             {/* Root-level documents (excluding pinned system docs) */}
-            {rootDocuments
+            {sortedRootDocuments
               .filter((d) => d.docType !== "todo" && d.docType !== "daily_parent" && d.docType !== "quick_note_parent")
               .map((doc) => (
               <DraggableDocItem
@@ -802,7 +993,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
                 onEnterFolder={enterFolder}
               />
             ))}
-              </>
+              </AnimatedTreeList>
             )}
           </div>
 
@@ -851,6 +1042,24 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
               >
                 <FolderIcon size={14} />
               </button>
+              <button
+                onClick={() => setIsImportOpen(true)}
+                className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                title="Import"
+              >
+                <Upload size={14} />
+              </button>
+              <button
+                onClick={toggleGraph}
+                className={`p-1 rounded hover:bg-black/5 transition-colors ${
+                  isGraphOpen
+                    ? "bg-black/5 text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                title="Graph"
+              >
+                <Waypoints size={14} />
+              </button>
             </div>
             <div className="flex items-center gap-1">
               <IconTooltipButton
@@ -875,7 +1084,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
       </div>
 
       {/* Drag overlay — floating ghost while dragging */}
-      <DragOverlay>
+      <DragOverlay dropAnimation={fadeInPlaceDropAnimation}>
         {(draggingDoc || draggingFolder) ? (
           <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-white shadow-md border border-border text-xs text-foreground opacity-90">
             {draggingFolder ? (
@@ -991,6 +1200,11 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
           </button>
         </div>
       )}
+
+      <ImportDialog
+        isOpen={isImportOpen}
+        onClose={() => setIsImportOpen(false)}
+      />
     </DndContext>
   );
 }
@@ -1001,11 +1215,13 @@ function IconTooltipButton({
   label,
   onClick,
   active,
+  framed,
   children,
 }: {
   label: string;
   onClick?: () => void;
   active?: boolean;
+  framed?: boolean;
   children: React.ReactNode;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -1040,11 +1256,19 @@ function IconTooltipButton({
         onMouseLeave={hide}
         onFocus={show}
         onBlur={hide}
-        className={`relative p-1 rounded transition-colors ${
-          active
-            ? "bg-black/5 text-foreground"
-            : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
-        }`}
+        className={
+          framed
+            ? `relative flex-1 flex items-center justify-center py-1.5 rounded-md transition-colors ${
+                active
+                  ? "bg-black/[0.12] text-foreground"
+                  : "bg-black/[0.06] text-muted-foreground hover:bg-black/[0.1] hover:text-foreground"
+              }`
+            : `relative p-1 rounded transition-colors ${
+                active
+                  ? "bg-black/5 text-foreground"
+                  : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+              }`
+        }
       >
         {children}
       </button>
@@ -1058,7 +1282,7 @@ function IconTooltipButton({
               left: tooltipPos.left,
               transform: "translate(-50%, -100%)",
             }}
-            className="pointer-events-none z-[9999] px-1.5 py-0.5 rounded bg-neutral-800 text-white text-[10px] font-medium leading-none whitespace-nowrap"
+            className="pointer-events-none z-[9999] px-1.5 py-0.5 rounded bg-neutral-100 text-neutral-800 text-[10px] font-medium leading-none whitespace-nowrap border border-neutral-200"
           >
             {label}
           </span>,
@@ -1071,9 +1295,17 @@ function IconTooltipButton({
 function SidebarFolderBreadcrumb({
   path,
   onNavigate,
+  sortMode,
+  sortDir,
+  onSortModeChange,
+  onSortDirChange,
 }: {
   path: { id: string; name: string }[];
   onNavigate: (folderId: string | null) => void;
+  sortMode: SidebarSortMode;
+  sortDir: SidebarSortDir;
+  onSortModeChange: (mode: SidebarSortMode) => void;
+  onSortDirChange: (dir: SidebarSortDir) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -1085,40 +1317,164 @@ function SidebarFolderBreadcrumb({
   const isAtRoot = path.length === 0;
 
   return (
-    <div
-      ref={scrollRef}
-      className="mx-2 mb-1.5 min-w-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-    >
-      <div className="flex items-center gap-1 whitespace-nowrap text-xs font-medium">
-        <button
-          type="button"
-          onClick={() => onNavigate(null)}
-          className={`shrink-0 transition-colors ${
-            isAtRoot
-              ? "text-foreground font-semibold"
-              : "text-muted-foreground hover:text-foreground font-medium"
-          }`}
-        >
-          root
-        </button>
-        {path.map((segment, index) => (
-          <span key={segment.id} className="flex items-center gap-1">
-            <span className="text-muted-foreground shrink-0">›</span>
-            <button
-              type="button"
-              onClick={() => onNavigate(segment.id)}
-              className={`shrink-0 max-w-[140px] truncate transition-colors ${
-                index === path.length - 1
-                  ? "text-foreground font-semibold"
-                  : "text-muted-foreground hover:text-foreground font-medium"
-              }`}
-            >
-              {segment.name}
-            </button>
-          </span>
-        ))}
+    <div className="mx-2 mb-1.5 flex items-center gap-0.5 min-w-0">
+      <div
+        ref={scrollRef}
+        className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+      >
+        <div className="flex items-center gap-1 whitespace-nowrap text-xs font-medium">
+          <button
+            type="button"
+            onClick={() => onNavigate(null)}
+            className={`shrink-0 transition-colors ${
+              isAtRoot
+                ? "text-foreground font-semibold"
+                : "text-muted-foreground hover:text-foreground font-medium"
+            }`}
+          >
+            root
+          </button>
+          {path.map((segment, index) => (
+            <span key={segment.id} className="flex items-center gap-1">
+              <span className="text-muted-foreground shrink-0">›</span>
+              <button
+                type="button"
+                onClick={() => onNavigate(segment.id)}
+                className={`shrink-0 max-w-[140px] truncate transition-colors ${
+                  index === path.length - 1
+                    ? "text-foreground font-semibold"
+                    : "text-muted-foreground hover:text-foreground font-medium"
+                }`}
+              >
+                {segment.name}
+              </button>
+            </span>
+          ))}
+        </div>
       </div>
+      <SidebarSortMenu
+        sortMode={sortMode}
+        sortDir={sortDir}
+        onSortModeChange={onSortModeChange}
+        onSortDirChange={onSortDirChange}
+      />
     </div>
+  );
+}
+
+function SidebarSortMenu({
+  sortMode,
+  sortDir,
+  onSortModeChange,
+  onSortDirChange,
+}: {
+  sortMode: SidebarSortMode;
+  sortDir: SidebarSortDir;
+  onSortModeChange: (mode: SidebarSortMode) => void;
+  onSortDirChange: (dir: SidebarSortDir) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    if (!open || !btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    setMenuPos({ top: rect.bottom + 4, left: rect.right });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (btnRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        aria-label="Sort files"
+        aria-expanded={open}
+        title="Sort"
+        onClick={() => setOpen((v) => !v)}
+        className={`p-0.5 rounded shrink-0 transition-colors ${
+          open
+            ? "bg-black/10 text-foreground"
+            : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+        }`}
+      >
+        <ListFilter size={12} />
+      </button>
+      {open &&
+        createPortal(
+          <div
+            ref={panelRef}
+            className="fixed z-[9999] flex items-center gap-1.5 bg-white border border-border rounded-lg shadow-lg px-1.5 py-1.5"
+            style={{ top: menuPos.top, left: menuPos.left, transform: "translateX(-100%)" }}
+          >
+            <div className="flex items-center rounded-md border border-border overflow-hidden">
+              <button
+                type="button"
+                title="Ascending"
+                aria-label="Sort ascending"
+                aria-pressed={sortDir === "asc"}
+                onClick={() => onSortDirChange("asc")}
+                className={`p-1 transition-colors ${
+                  sortDir === "asc"
+                    ? "bg-black/10 text-foreground"
+                    : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+                }`}
+              >
+                <ArrowUp size={12} />
+              </button>
+              <button
+                type="button"
+                title="Descending"
+                aria-label="Sort descending"
+                aria-pressed={sortDir === "desc"}
+                onClick={() => onSortDirChange("desc")}
+                className={`p-1 transition-colors ${
+                  sortDir === "desc"
+                    ? "bg-black/10 text-foreground"
+                    : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+                }`}
+              >
+                <ArrowDown size={12} />
+              </button>
+            </div>
+            <label className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground whitespace-nowrap">
+              Sort by
+              <select
+                aria-label="Sort by"
+                value={sortMode}
+                onChange={(e) => onSortModeChange(e.target.value as SidebarSortMode)}
+                className="text-xs font-medium bg-white border border-border rounded-md px-1.5 py-1 outline-none focus:border-black/30 text-foreground"
+              >
+                {SORT_MODES.map((mode) => (
+                  <option key={mode.value} value={mode.value}>
+                    {mode.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 
@@ -1305,7 +1661,7 @@ function FolderItem({
       </div>
 
       {folder.isExpanded && !flatList && (
-        <div>
+        <AnimatedTreeList>
           {folder.children.map((child) => (
             <FolderItem
               key={child.id}
@@ -1355,7 +1711,7 @@ function FolderItem({
               onEnterFolder={onEnterFolder}
             />
           ))}
-        </div>
+        </AnimatedTreeList>
       )}
     </div>
   );
@@ -1539,7 +1895,7 @@ function DraggableDocItem({
 
       {/* Render child folders and documents when expanded */}
       {hasChildren && isExpanded && (
-        <div>
+        <AnimatedTreeList>
           {/* Child folders nested under this document */}
           {doc.childFolders?.map((childFolder) => (
             <FolderItem
@@ -1594,7 +1950,7 @@ function DraggableDocItem({
               onEnterFolder={onEnterFolder}
             />
           ))}
-        </div>
+        </AnimatedTreeList>
       )}
     </div>
   );

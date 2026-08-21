@@ -768,7 +768,9 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
       <div
         className={`px-14 py-12 ${noteSettings.fullWidth ? '' : 'max-w-[800px]'}`}
         style={{
-          marginLeft: activeAnnotation ? '2rem' : (noteSettings.fullWidth ? '2rem' : 'calc(50% - 400px)'),
+          marginLeft: activeAnnotation || noteSettings.fullWidth
+            ? '2rem'
+            : 'max(0px, calc(50% - 400px))',
           paddingBottom: activeAnnotation ? '420px' : undefined,
           transition: 'margin-left 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
           '--note-font-size': noteSettings.fontSize ? `${16 * noteSettings.fontSize}px` : '16px',

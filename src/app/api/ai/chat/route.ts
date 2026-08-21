@@ -22,9 +22,13 @@ import {
   assembleContextTierContext,
   assembleGeneralContext,
   selectModel,
+  usesAdaptiveThinking,
+  MODEL_HAIKU,
+  MODEL_SONNET,
+  MODEL_OPUS,
   type ContextItem,
 } from "@/lib/ai/context";
-import { TOOL_DEFINITIONS, executeTool } from "@/lib/ai/tools";
+import { CHAT_TOOLS, executeTool } from "@/lib/ai/tools";
 
 import { requireUserForAI } from "@/lib/serverAuth";
 export const runtime = "nodejs";
@@ -33,6 +37,84 @@ export const maxDuration = 120;
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY ?? "",
 });
+
+async function resolvePinnedContext(
+  contextItems: ContextItem[] | undefined
+): Promise<{
+  docs: { id: string; title: string; content: string }[];
+  blockItems: ContextItem[];
+  docIds: string[];
+}> {
+  const items = contextItems ?? [];
+  const docItems = items.filter(
+    (ci): ci is ContextItem & { docId: string } =>
+      ci.type === "document" && !!ci.docId
+  );
+  const docIds = docItems.map((ci) => ci.docId);
+  const blockItems = items.filter((ci) => ci.type === "block");
+
+  const clientDocs: { id: string; title: string; content: string }[] = [];
+  const missingDocIds: string[] = [];
+  for (const ci of docItems) {
+    if (ci.content) {
+      clientDocs.push({
+        id: ci.docId,
+        title: ci.title ?? "Untitled",
+        content: ci.content,
+      });
+    } else {
+      missingDocIds.push(ci.docId);
+    }
+  }
+
+  let dbDocs: { id: string; title: string; content: string }[] = [];
+  if (missingDocIds.length > 0) {
+    dbDocs = await fetchContextDocuments(missingDocIds);
+  }
+
+  return { docs: [...clientDocs, ...dbDocs], blockItems, docIds };
+}
+
+function attachChatStream(
+  response: ReturnType<typeof anthropic.messages.stream>,
+  controller: ReadableStreamDefaultController,
+  encoder: TextEncoder
+) {
+  response.on("text", (text: string) => {
+    controller.enqueue(
+      encoder.encode(
+        `data: ${JSON.stringify({ type: "text", content: text })}\n\n`
+      )
+    );
+  });
+  response.on("contentBlock", (block: Anthropic.ContentBlock) => {
+    if (block.type === "server_tool_use") {
+      controller.enqueue(
+        encoder.encode(
+          `data: ${JSON.stringify({ type: "tool_use", tool: block.name })}\n\n`
+        )
+      );
+    }
+  });
+}
+
+function chatStreamParams(
+  model: string,
+  systemPrompt: string,
+  messages: Anthropic.MessageParam[],
+  tools?: Anthropic.Messages.ToolUnion[]
+): Anthropic.MessageCreateParamsStreaming {
+  const adaptive = usesAdaptiveThinking(model);
+  return {
+    model,
+    max_tokens: adaptive ? 8192 : 4096,
+    system: systemPrompt,
+    messages,
+    stream: true,
+    ...(tools ? { tools } : {}),
+    ...(adaptive ? { output_config: { effort: "medium" } } : {}),
+  };
+}
 
 /**
  * POST /api/ai/chat
@@ -108,11 +190,19 @@ export async function POST(req: NextRequest) {
     let sourceMap: SourceMap = {};
 
     if (tier === "GENERAL") {
-      // Research mode — no retrieval, Claude answers from training data
-      const ctx = assembleGeneralContext();
+      // Research mode — no automatic retrieval. Pinned notes are still included.
+      const pinned = await resolvePinnedContext(contextItems);
+      const ctx = assembleGeneralContext(pinned.docs, pinned.blockItems);
       systemPrompt = ctx.systemPrompt;
       contextTokens = ctx.contextTokens;
-      console.log("[/api/ai/chat] GENERAL tier — no retrieval, research mode");
+      sourceMap = ctx.sourceMap;
+      documentIds = pinned.docIds;
+      console.log(
+        `[/api/ai/chat] GENERAL tier — research mode` +
+          (pinned.docs.length > 0
+            ? ` with ${pinned.docs.length} pinned note(s)`
+            : " (no pinned notes)")
+      );
     }
 
     if (tier === "TIER0") {
@@ -219,35 +309,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (tier === "CONTEXT") {
-      const docItems = (contextItems ?? [])
-        .filter((ci): ci is ContextItem & { docId: string } =>
-          ci.type === "document" && !!ci.docId
-        );
-      const docIds = docItems.map((ci) => ci.docId);
-      const blockItems = (contextItems ?? []).filter(
-        (ci) => ci.type === "block"
-      );
-
-      // Use client-provided content when available (avoids RLS issues with anon key)
-      const clientDocs: { id: string; title: string; content: string }[] = [];
-      const missingDocIds: string[] = [];
-      for (const ci of docItems) {
-        if (ci.content) {
-          clientDocs.push({ id: ci.docId, title: ci.title ?? "Untitled", content: ci.content });
-        } else {
-          missingDocIds.push(ci.docId);
-        }
-      }
-
-      // Only fetch from DB for docs not provided by the client
-      let dbDocs: { id: string; title: string; content: string }[] = [];
-      if (missingDocIds.length > 0) {
-        dbDocs = await fetchContextDocuments(missingDocIds);
-      }
-
-      let docs = [...clientDocs, ...dbDocs];
+      const pinned = await resolvePinnedContext(contextItems);
+      let docs = pinned.docs;
       console.log(
-        `[/api/ai/chat] CONTEXT tier — ${docs.length} docs (${clientDocs.length} from client, ${dbDocs.length} from DB)`,
+        `[/api/ai/chat] CONTEXT tier — ${docs.length} docs (${pinned.docs.length} resolved)`,
         docs.map((d) => ({ id: d.id, title: d.title, contentLen: d.content?.length ?? 0 }))
       );
 
@@ -260,11 +325,11 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const ctx = assembleContextTierContext(docs, blockItems);
+      const ctx = assembleContextTierContext(docs, pinned.blockItems);
       systemPrompt = ctx.systemPrompt;
       contextTokens = ctx.contextTokens;
       sourceMap = ctx.sourceMap;
-      documentIds = docIds.length > 0 ? docIds : (activeDocumentId ? [activeDocumentId] : []);
+      documentIds = pinned.docIds.length > 0 ? pinned.docIds : (activeDocumentId ? [activeDocumentId] : []);
     }
 
     // Safety fallback
@@ -274,8 +339,9 @@ export async function POST(req: NextRequest) {
     // ─── Step 3: Select model ───
 
     const MODEL_MAP: Record<string, string> = {
-      "Claude Haiku": "claude-haiku-4-5-20251001",
-      "Claude Sonnet": "claude-sonnet-4-6",
+      "Claude Haiku": MODEL_HAIKU,
+      "Claude Sonnet": MODEL_SONNET,
+      "Claude Opus": MODEL_OPUS,
     };
 
     const model = modelOverride && MODEL_MAP[modelOverride]
@@ -323,27 +389,17 @@ export async function POST(req: NextRequest) {
                 console.warn(
                   `[/api/ai/chat] Token budget exceeded (~${estimatedTokens} tokens), stopping tool use at round ${round}`
                 );
-                // Ask Claude to answer with what it has, no more tools
-                const response = anthropic.messages.stream({
-                  model,
-                  max_tokens: 4096,
-                  system: systemPrompt,
-                  messages: [
+                const response = anthropic.messages.stream(
+                  chatStreamParams(model, systemPrompt, [
                     ...currentMessages,
                     {
                       role: "user",
                       content:
                         "You have gathered enough information. Please answer the original question now using the tool results you already have. Do not call any more tools.",
                     },
-                  ],
-                });
-                response.on("text", (text) => {
-                  controller.enqueue(
-                    encoder.encode(
-                      `data: ${JSON.stringify({ type: "text", content: text })}\n\n`
-                    )
-                  );
-                });
+                  ])
+                );
+                attachChatStream(response, controller, encoder);
                 const final = await response.finalMessage();
                 inputTokens += final.usage?.input_tokens ?? 0;
                 outputTokens += final.usage?.output_tokens ?? 0;
@@ -351,35 +407,44 @@ export async function POST(req: NextRequest) {
               }
             }
 
-            const response = anthropic.messages.stream({
-              model,
-              max_tokens: 4096,
-              system: systemPrompt,
-              messages: currentMessages,
-              tools: TOOL_DEFINITIONS,
-            });
-
-            response.on("text", (text) => {
-              controller.enqueue(
-                encoder.encode(
-                  `data: ${JSON.stringify({ type: "text", content: text })}\n\n`
-                )
-              );
-            });
+            const allowTools = round < MAX_TOOL_ROUNDS;
+            const response = anthropic.messages.stream(
+              chatStreamParams(
+                model,
+                systemPrompt,
+                currentMessages,
+                allowTools ? CHAT_TOOLS : undefined
+              )
+            );
+            attachChatStream(response, controller, encoder);
 
             const finalMessage = await response.finalMessage();
             inputTokens += finalMessage.usage?.input_tokens ?? 0;
             outputTokens += finalMessage.usage?.output_tokens ?? 0;
 
-            // If no tool use, we're done
+            // Server tools (web_search) are executed by Anthropic. pause_turn
+            // means the search turn was long — send the assistant message back
+            // unchanged so the model can continue.
+            if (finalMessage.stop_reason === "pause_turn") {
+              currentMessages.push({
+                role: "assistant",
+                content:
+                  finalMessage.content as unknown as Anthropic.Messages.ContentBlockParam[],
+              });
+              console.log(`[/api/ai/chat] pause_turn at round ${round + 1}`);
+              continue;
+            }
+
+            // Client tools only — web_search results are already in the message
             if (finalMessage.stop_reason !== "tool_use") break;
 
-            // Extract tool_use blocks
             const toolBlocks = finalMessage.content.filter(
-              (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+              (b): b is Anthropic.ToolUseBlock =>
+                b.type === "tool_use" && b.name !== "web_search"
             );
 
-            // Notify client which tools are being used
+            if (toolBlocks.length === 0) break;
+
             for (const tool of toolBlocks) {
               controller.enqueue(
                 encoder.encode(
@@ -391,7 +456,6 @@ export async function POST(req: NextRequest) {
               );
             }
 
-            // Execute tools in parallel
             const toolResults: Anthropic.Messages.ToolResultBlockParam[] =
               await Promise.all(
                 toolBlocks.map(async (tool) => ({
@@ -404,7 +468,6 @@ export async function POST(req: NextRequest) {
                 }))
               );
 
-            // Notify client if a note was created so it can refresh the sidebar
             for (let ti = 0; ti < toolBlocks.length; ti++) {
               if (toolBlocks[ti].name === "create_note") {
                 try {
@@ -428,7 +491,6 @@ export async function POST(req: NextRequest) {
               }
             }
 
-            // Append assistant response + tool results for next round
             currentMessages.push({
               role: "assistant",
               content:

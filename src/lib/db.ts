@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from "./supabase";
 import { localDateTag, dateTagsForLookup, dayContainerTitle } from "./dateTag";
-import { DbDocument, DbFolder, Document, DocumentMeta, Folder, SearchResult, Backlink, DbBacklink, DbAnnotation, AnnotationMessage, DbAttachment, Attachment, DbPdfAnnotation, PdfAnnotation, PdfAnnotationColor, PdfAnnotationType, TextAnchor } from "./types";
+import { DbDocument, DbFolder, Document, DocumentMeta, Folder, SearchResult, Backlink, DbBacklink, DbAnnotation, AnnotationMessage, DbAttachment, Attachment, DbPdfAnnotation, PdfAnnotation, PdfAnnotationColor, PdfAnnotationType, TextAnchor, GraphLayout } from "./types";
 import { v4 as uuidv4 } from "uuid";
 
 // ============================================================
@@ -1164,6 +1164,123 @@ export async function getOutgoingLinks(
     documentId: d.id,
     documentTitle: d.title,
   }));
+}
+
+/** All backlink edges for the current user. RLS scopes the query. */
+export async function listAllBacklinks(): Promise<{ source: string; target: string }[]> {
+  if (!isSupabaseConfigured()) {
+    return getLocalBacklinks().map((l) => ({
+      source: l.source_document_id,
+      target: l.target_document_id,
+    }));
+  }
+
+  const { data, error } = await supabase!
+    .from("backlinks")
+    .select("source_document_id, target_document_id");
+
+  if (error) throw error;
+  return (data ?? []).map((row: { source_document_id: string; target_document_id: string }) => ({
+    source: row.source_document_id,
+    target: row.target_document_id,
+  }));
+}
+
+/** Load persisted graph node positions from the database. */
+export async function getGraphLayout(): Promise<GraphLayout | null> {
+  if (!isSupabaseConfigured()) return null;
+
+  const userId = await getCurrentUserId();
+  if (userId === "local") return null;
+
+  const { data, error } = await supabase!
+    .from("graph_layouts")
+    .select("topology_hash, positions")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    console.warn("[graph] failed to load layout", error);
+    return null;
+  }
+  if (!data) return null;
+  const positions = (data.positions ?? {}) as Record<string, [number, number]>;
+  return { topologyHash: data.topology_hash as string, positions };
+}
+
+/** Persist graph positions to the database. Instant cache is handled by the caller. */
+export async function saveGraphLayout(layout: GraphLayout): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+
+  const userId = await getCurrentUserId();
+  if (userId === "local") return;
+
+  const { error } = await supabase!.from("graph_layouts").upsert(
+    {
+      user_id: userId,
+      topology_hash: layout.topologyHash,
+      positions: layout.positions,
+    },
+    { onConflict: "user_id" }
+  );
+  if (error) console.warn("[graph] failed to save layout", error);
+}
+
+/** Re-parse every document and replace the backlinks table. Returns edge count. */
+export async function rebuildAllBacklinks(allDocuments: DbDocument[]): Promise<number> {
+  let docsWithContent: Pick<DbDocument, "id" | "title" | "content">[] = [];
+
+  if (!isSupabaseConfigured()) {
+    docsWithContent = getLocalDocuments();
+  } else {
+    const { data, error } = await supabase!
+      .from("documents")
+      .select("id, title, content");
+    if (error) throw error;
+    docsWithContent = (data ?? []) as Pick<DbDocument, "id" | "title" | "content">[];
+  }
+
+  const titleIndex = allDocuments.length > 0 ? allDocuments : (docsWithContent as DbDocument[]);
+  const links: { source: string; target: string }[] = [];
+  const seen = new Set<string>();
+  for (const doc of docsWithContent) {
+    const targets = parseBacklinks(doc.content, titleIndex);
+    for (const target of targets) {
+      if (target === doc.id) continue;
+      const key = `${doc.id}:${target}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      links.push({ source: doc.id, target });
+    }
+  }
+
+  if (!isSupabaseConfigured()) {
+    const now = new Date().toISOString();
+    setLocalBacklinks(
+      links.map((l) => ({
+        id: uuidv4(),
+        source_document_id: l.source,
+        target_document_id: l.target,
+        created_at: now,
+      }))
+    );
+    return links.length;
+  }
+
+  const userId = await getCurrentUserId();
+  await supabase!.from("backlinks").delete().eq("user_id", userId);
+
+  const CHUNK = 500;
+  for (let i = 0; i < links.length; i += CHUNK) {
+    const rows = links.slice(i, i + CHUNK).map((l) => ({
+      source_document_id: l.source,
+      target_document_id: l.target,
+      user_id: userId,
+    }));
+    const { error } = await supabase!.from("backlinks").insert(rows);
+    if (error) throw error;
+  }
+  return links.length;
 }
 
 // ============================================================

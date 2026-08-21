@@ -47,6 +47,54 @@ import {
 } from "./db";
 import { v4 as uuidv4 } from "uuid";
 
+const UNDO_LIMIT = 50;
+
+type DocLocation = { folderId: string | null; parentDocId: string | null };
+type FolderLocation = { parentId: string | null; parentDocumentId: string | null };
+
+type MoveStep =
+  | { kind: "doc"; id: string; from: DocLocation; to: DocLocation }
+  | { kind: "folder"; id: string; from: FolderLocation; to: FolderLocation };
+
+type UndoCommand = { steps: MoveStep[] };
+
+let skipUndoRecord = false;
+let undoGroupDepth = 0;
+let undoGroupSteps: MoveStep[] = [];
+let undoStack: UndoCommand[] = [];
+let redoStack: UndoCommand[] = [];
+let lastFileActionAt = 0;
+
+const FILE_UNDO_PRIORITY_MS = 15_000;
+
+export function shouldHandleFileUndo(kind: "undo" | "redo", inEditor: boolean) {
+  const stack = kind === "undo" ? undoStack : redoStack;
+  if (stack.length === 0) return false;
+  if (!inEditor) return true;
+  return Date.now() - lastFileActionAt < FILE_UNDO_PRIORITY_MS;
+}
+
+function docLocEqual(a: DocLocation, b: DocLocation) {
+  return a.folderId === b.folderId && a.parentDocId === b.parentDocId;
+}
+
+function folderLocEqual(a: FolderLocation, b: FolderLocation) {
+  return a.parentId === b.parentId && a.parentDocumentId === b.parentDocumentId;
+}
+
+function recordMove(step: MoveStep) {
+  if (skipUndoRecord) return;
+  if (step.kind === "doc" && docLocEqual(step.from, step.to)) return;
+  if (step.kind === "folder" && folderLocEqual(step.from, step.to)) return;
+  if (undoGroupDepth > 0) {
+    undoGroupSteps.push(step);
+    return;
+  }
+  undoStack = [...undoStack, { steps: [step] }].slice(-UNDO_LIMIT);
+  redoStack = [];
+  lastFileActionAt = Date.now();
+}
+
 // ─── LocalStorage Cache Helpers ───
 
 const CACHE_KEYS = {
@@ -148,6 +196,7 @@ interface AppState {
   activeDocumentId: string | null;
   activeDocument: Document | null;
   isChatOpen: boolean;
+  isGraphOpen: boolean;
   chatMessages: ChatMessage[];
   contextItems: ContextItem[];
   activeAnnotation: Annotation | null;
@@ -197,6 +246,10 @@ interface AppState {
   moveFolder: (folderId: string, parentId: string | null, parentDocumentId?: string | null) => Promise<void>;
   setParentDocument: (docId: string, parentDocId: string | null) => Promise<void>;
   toggleChat: () => void;
+  openGraph: () => void;
+  closeGraph: () => void;
+  toggleGraph: () => void;
+  expandFolders: (folderIds: string[]) => void;
   addChatMessage: (message: Omit<ChatMessage, "id" | "timestamp">) => void;
   addContextItem: (item: ContextItem) => void;
   removeContextItem: (item: ContextItem) => void;
@@ -226,6 +279,11 @@ interface AppState {
   addTodo: (text: string) => Promise<void>;
   toggleTodo: (blockId: string) => Promise<void>;
   addQuickNote: (text: string) => Promise<void>;
+
+  // File-tree undo (move document / folder)
+  undo: () => Promise<void>;
+  redo: () => Promise<void>;
+  runUndoable: (fn: () => Promise<void>) => Promise<void>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -236,6 +294,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeDocumentId: null,
   activeDocument: null,
   isChatOpen: false,
+  isGraphOpen: false,
   chatMessages: [],
   contextItems: [],
   activeAnnotation: null,
@@ -397,6 +456,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openDocument: async (docId: string) => {
     const { openTabs, _isNavigating, navHistory, navIndex } = get();
+    if (get().isGraphOpen) set({ isGraphOpen: false });
     const existing = openTabs.find((t) => t.documentId === docId);
 
     // Push to nav history (unless we're navigating via back/forward)
@@ -457,6 +517,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setActiveTab: async (docId: string) => {
+    if (get().isGraphOpen) set({ isGraphOpen: false });
     const { _isNavigating, navHistory, navIndex, _documentCache, _annotationsCache } = get();
     // Push to nav history (unless we're navigating via back/forward)
     if (!_isNavigating) {
@@ -673,8 +734,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   moveDocument: async (docId: string, folderId: string | null) => {
-    // Optimistic: update folder_id in local state
     const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const prev = _dbDocuments.find((d) => d.id === docId);
+    if (prev) {
+      recordMove({
+        kind: "doc",
+        id: docId,
+        from: { folderId: prev.folder_id, parentDocId: prev.parent_document_id },
+        to: { folderId, parentDocId: null },
+      });
+    }
     const newDocs = _dbDocuments.map((d) =>
       d.id === docId ? { ...d, folder_id: folderId, parent_document_id: null } : d
     );
@@ -684,14 +753,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       rootDocuments: getRootDocuments(newDocs, _dbFolders),
     });
     dbMoveDocument(docId, folderId).then(() => {
-      // Reconcile: update with server-confirmed data
       get()._rebuildTree();
     }).catch(console.error);
   },
 
   moveFolder: async (folderId: string, parentId: string | null, parentDocumentId: string | null = null) => {
-    // Optimistic: update parent_id / parent_document_id in local state
     const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const prev = _dbFolders.find((f) => f.id === folderId);
+    if (prev) {
+      recordMove({
+        kind: "folder",
+        id: folderId,
+        from: { parentId: prev.parent_id, parentDocumentId: prev.parent_document_id },
+        to: { parentId, parentDocumentId },
+      });
+    }
     const newFolders = _dbFolders.map((f) =>
       f.id === folderId
         ? { ...f, parent_id: parentId, parent_document_id: parentDocumentId }
@@ -708,9 +784,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setParentDocument: async (docId: string, parentDocId: string | null) => {
-    // Optimistic: update parent_document_id in local state
     const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const prev = _dbDocuments.find((d) => d.id === docId);
     const parentDoc = parentDocId ? _dbDocuments.find((d) => d.id === parentDocId) : null;
+    if (prev) {
+      recordMove({
+        kind: "doc",
+        id: docId,
+        from: { folderId: prev.folder_id, parentDocId: prev.parent_document_id },
+        to: {
+          folderId: parentDoc ? parentDoc.folder_id : prev.folder_id,
+          parentDocId,
+        },
+      });
+    }
     const newDocs = _dbDocuments.map((d) =>
       d.id === docId
         ? {
@@ -730,12 +817,100 @@ export const useAppStore = create<AppState>((set, get) => ({
     }).catch(console.error);
   },
 
+  runUndoable: async (fn) => {
+    undoGroupDepth += 1;
+    if (undoGroupDepth === 1) undoGroupSteps = [];
+    try {
+      await fn();
+    } finally {
+      undoGroupDepth -= 1;
+      if (undoGroupDepth === 0 && undoGroupSteps.length > 0) {
+        undoStack = [...undoStack, { steps: undoGroupSteps }].slice(-UNDO_LIMIT);
+        redoStack = [];
+        undoGroupSteps = [];
+        lastFileActionAt = Date.now();
+      }
+    }
+  },
+
+  undo: async () => {
+    const command = undoStack[undoStack.length - 1];
+    if (!command) return;
+    undoStack = undoStack.slice(0, -1);
+    skipUndoRecord = true;
+    try {
+      for (let i = command.steps.length - 1; i >= 0; i--) {
+        const step = command.steps[i];
+        if (step.kind === "doc") {
+          if (step.from.parentDocId) {
+            await get().setParentDocument(step.id, step.from.parentDocId);
+          } else {
+            await get().moveDocument(step.id, step.from.folderId);
+          }
+        } else {
+          await get().moveFolder(step.id, step.from.parentId, step.from.parentDocumentId);
+        }
+      }
+      redoStack = [...redoStack, command];
+      lastFileActionAt = Date.now();
+    } finally {
+      skipUndoRecord = false;
+    }
+  },
+
+  redo: async () => {
+    const command = redoStack[redoStack.length - 1];
+    if (!command) return;
+    redoStack = redoStack.slice(0, -1);
+    skipUndoRecord = true;
+    try {
+      for (const step of command.steps) {
+        if (step.kind === "doc") {
+          if (step.to.parentDocId) {
+            await get().setParentDocument(step.id, step.to.parentDocId);
+          } else {
+            await get().moveDocument(step.id, step.to.folderId);
+          }
+        } else {
+          await get().moveFolder(step.id, step.to.parentId, step.to.parentDocumentId);
+        }
+      }
+      undoStack = [...undoStack, command].slice(-UNDO_LIMIT);
+      lastFileActionAt = Date.now();
+    } finally {
+      skipUndoRecord = false;
+    }
+  },
+
   toggleChat: () =>
     set((s) => ({
       isChatOpen: !s.isChatOpen,
       // Close annotation chat when opening main chat
       activeAnnotation: !s.isChatOpen ? null : s.activeAnnotation,
     })),
+
+  openGraph: () => set({ isGraphOpen: true }),
+  closeGraph: () => set({ isGraphOpen: false }),
+  toggleGraph: () => set((s) => ({ isGraphOpen: !s.isGraphOpen })),
+
+  expandFolders: (folderIds: string[]) => {
+    if (folderIds.length === 0) return;
+    const { expandedFolderIds, _dbFolders, _dbDocuments } = get();
+    const next = new Set(expandedFolderIds);
+    let changed = false;
+    for (const id of folderIds) {
+      if (!next.has(id)) {
+        next.add(id);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    set({
+      expandedFolderIds: next,
+      folders: buildFolderTree(_dbFolders, _dbDocuments, next),
+      rootDocuments: getRootDocuments(_dbDocuments, _dbFolders),
+    });
+  },
 
   addChatMessage: (msg) => {
     const message: ChatMessage = {

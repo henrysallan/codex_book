@@ -36,6 +36,7 @@ const FLOW_LABELS: Record<string, string> = {
   "chat-tier1": "Search Chat",
   "chat-tier2": "Deep Search",
   "chat-context": "Context Query",
+  "chat-general": "Research Chat",
   annotate: "Annotations",
   index: "Indexing",
   "index-summary": "Summarization",
@@ -44,8 +45,10 @@ const FLOW_LABELS: Record<string, string> = {
 };
 
 const MODEL_LABELS: Record<string, string> = {
-  "claude-haiku-4-5-20251001": "Claude Haiku",
-  "claude-sonnet-4-6": "Claude Sonnet",
+  "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
+  "claude-sonnet-5": "Claude Sonnet 5",
+  "claude-opus-5": "Claude Opus 5",
+  "claude-sonnet-4-6": "Claude Sonnet 4.6",
   "claude-3-5-haiku-20241022": "Claude 3.5 Haiku",
   "claude-sonnet-4-20250514": "Claude Sonnet 4",
   "llama-3.1-8b-instant": "Llama 3.1 8B",
@@ -225,7 +228,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             style={{ height: "100%" }}
                           >
                             {/* Tooltip */}
-                            <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap bg-neutral-800 text-white text-[10px] px-2 py-1 rounded shadow-lg pointer-events-none">
+                            <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap bg-neutral-100 text-neutral-800 text-[10px] px-2 py-1 rounded border border-neutral-200 pointer-events-none">
                               <div className="font-medium">{day}</div>
                               <div>
                                 {formatTokens(total)} tokens · {val.calls}{" "}

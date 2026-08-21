@@ -14,8 +14,9 @@ Guidelines:
 - Be concise and direct. Don't repeat what the user already knows.
 - Use markdown formatting where appropriate.
 - When referencing specific documents, mention them by title.
+- You have a web_search tool. Use it when you need current facts, news, or information beyond the user's notes and your training data.
 - If you're unsure or the provided context doesn't contain an answer, say so honestly.
-- Don't make up information that isn't in the provided context.`;
+- Don't make up information that isn't in the provided context or in search results you retrieved.`;
 
 // ─── Token estimation ───
 
@@ -49,7 +50,7 @@ The user is currently editing the following document and is asking a question ab
 ${trimmed}
 ---
 
-Answer the user's question based on this document. If the answer isn't in the document, say so.`;
+Answer the user's question based on this document. If the answer isn't in the document, say so. You may use web_search for current or external facts that complement the document.`;
 
   return {
     systemPrompt,
@@ -60,19 +61,45 @@ Answer the user's question based on this document. If the answer isn't in the do
 // ─── GENERAL: Research / general knowledge (no retrieval) ───
 
 /**
- * Build context for GENERAL tier — pure research mode.
- * No retrieval, no document context. Claude answers from training data.
+ * Build context for GENERAL tier — research mode.
+ * No automatic knowledge-base retrieval. Claude answers from training data
+ * and web search, plus any notes the user explicitly pinned.
  */
-export function assembleGeneralContext(): {
+export function assembleGeneralContext(
+  documents: ContextDocument[] = [],
+  blockItems: ContextItem[] = []
+): {
   systemPrompt: string;
   contextTokens: number;
+  sourceMap: SourceMap;
+  documentIds: string[];
 } {
+  const { notesText, sourceMap, documentIds } = formatPinnedNotes(
+    documents,
+    blockItems
+  );
+
+  const notesSection =
+    notesText.length > 0
+      ? `The user has pinned the following notes as additional context. Treat them as primary personal source material and cite them with [1], [2], etc.
+
+${notesText}
+
+---`
+      : "";
+
   const systemPrompt = `${BASE_SYSTEM}
 
-The user is asking a general knowledge or research question that does not reference their personal notes. Answer from your own knowledge.
-
+The user is in research mode. Answer from your own knowledge and, when useful, search the web for current or specific information.
+${notesSection ? `\n${notesSection}\n` : ""}
 Additional guidance for research mode:
 - Be thorough and informative — the user is using you as a research companion.
+- Use web_search for current events, recent publications, statistics, or anything that may post-date your training data.
+${
+  notesText.length > 0
+    ? "- Ground personal or project-specific claims in the pinned notes above and cite them. Use the web and your knowledge for everything else."
+    : "- The user has not pinned notes for this turn. Do not search their knowledge base unless they explicitly ask you to."
+}
 - Structure your answer clearly with headings, lists, or numbered points where appropriate.
 - If the topic is nuanced or debated, present multiple perspectives.
 - If you're unsure about a fact, say so rather than guessing.
@@ -81,6 +108,8 @@ Additional guidance for research mode:
   return {
     systemPrompt,
     contextTokens: estimateTokens(systemPrompt),
+    sourceMap,
+    documentIds,
   };
 }
 
@@ -154,7 +183,8 @@ Instructions:
 - Answer the user's question using the search results above.
 - ALWAYS cite your sources using bracket notation like [1], [2], etc. corresponding to the [Source N] labels above. Place citations at the end of the relevant sentence or claim.
 - If the summaries aren't detailed enough to fully answer the question, say something like "I found some relevant notes but may need to look deeper for a complete answer." This signals the user can escalate to a deeper search.
-- Do NOT invent details that aren't in the summaries.`;
+- Use web_search when the question also needs current or external information that isn't in the notes.
+- Do NOT invent details that aren't in the summaries or search results.`;
 
   return {
     systemPrompt,
@@ -222,6 +252,7 @@ Instructions:
 - Answer the user's question thoroughly using the full document content above.
 - ALWAYS cite your sources using bracket notation like [1], [2], etc. corresponding to the [Source N] labels above. Place citations at the end of the relevant sentence or claim.
 - You have the complete text, so provide detailed and accurate answers.
+- Use web_search when the question also needs current or external information that isn't in these documents.
 - If the documents don't contain the answer, say so honestly.`;
 
   return {
@@ -240,8 +271,48 @@ export interface ContextItem {
   blockId?: string;
   text?: string;
   title?: string;
+  /** Client-side block context uses `docTitle` (store ContextItem). */
+  docTitle?: string;
   /** Document content provided by the client (avoids server-side DB fetch / RLS issues) */
   content?: string;
+}
+
+function blockTitle(block: ContextItem): string {
+  return block.title ?? block.docTitle ?? "Unknown";
+}
+
+/** Format pinned documents/blocks into numbered source sections. */
+function formatPinnedNotes(
+  documents: ContextDocument[],
+  blockItems: ContextItem[]
+): { notesText: string; sourceMap: SourceMap; documentIds: string[] } {
+  const sections: string[] = [];
+  const sourceMap: SourceMap = {};
+  const documentIds: string[] = [];
+  let sourceNum = 1;
+
+  for (const doc of documents) {
+    documentIds.push(doc.id);
+    sourceMap[sourceNum] = { docId: doc.id, title: doc.title };
+    const plainText = blocksToPlainText(doc.content);
+    const trimmed = plainText.slice(0, 40_000);
+    sections.push(`=== [Source ${sourceNum}] "${doc.title}" ===\n${trimmed}`);
+    sourceNum++;
+  }
+
+  for (const block of blockItems) {
+    if (block.text) {
+      sections.push(
+        `=== Block from "${blockTitle(block)}" ===\n"${block.text}"`
+      );
+    }
+  }
+
+  return {
+    notesText: sections.join("\n\n"),
+    sourceMap,
+    documentIds,
+  };
 }
 
 /**
@@ -251,30 +322,10 @@ export function assembleContextTierContext(
   documents: ContextDocument[],
   blockItems: ContextItem[]
 ): { systemPrompt: string; contextTokens: number; sourceMap: SourceMap } {
-  const sections: string[] = [];
-  const sourceMap: SourceMap = {};
-  let sourceNum = 1;
-
-  for (const doc of documents) {
-    sourceMap[sourceNum] = { docId: doc.id, title: doc.title };
-    const plainText = blocksToPlainText(doc.content);
-    // Cap each document at ~40K chars
-    const trimmed = plainText.slice(0, 40_000);
-    sections.push(
-      `=== [Source ${sourceNum}] "${doc.title}" ===\n${trimmed}`
-    );
-    sourceNum++;
-  }
-
-  for (const block of blockItems) {
-    if (block.text) {
-      sections.push(
-        `=== Block from "${block.title ?? "Unknown"}" ===\n"${block.text}"`
-      );
-    }
-  }
-
-  const contextText = sections.join("\n\n");
+  const { notesText: contextText, sourceMap } = formatPinnedNotes(
+    documents,
+    blockItems
+  );
 
   const systemPrompt = `${BASE_SYSTEM}
 
@@ -288,6 +339,7 @@ Instructions:
 - The user wants to discuss the content above. Answer their questions based on this context.
 - ALWAYS cite your sources using bracket notation like [1], [2], etc. corresponding to the [Source N] labels above. Place citations at the end of the relevant sentence or claim.
 - This is an ongoing conversation — maintain context across messages.
+- Use web_search when the question also needs current or external information that isn't in the pinned context.
 - If asked to write, edit, or synthesize based on these documents, do so directly.`;
 
   return {
@@ -299,16 +351,27 @@ Instructions:
 
 // ─── Model selection ───
 
+export const MODEL_HAIKU = "claude-haiku-4-5-20251001";
+export const MODEL_SONNET = "claude-sonnet-5";
+export const MODEL_OPUS = "claude-opus-5";
+
+const ADAPTIVE_THINKING_MODELS = new Set([MODEL_SONNET, MODEL_OPUS]);
+
+export function usesAdaptiveThinking(model: string): boolean {
+  return ADAPTIVE_THINKING_MODELS.has(model);
+}
+
 /**
  * Select the appropriate Anthropic model based on context size.
- * <10K tokens → Haiku (fast, cheap)
- * 10K+ tokens → Sonnet (better reasoning for large contexts)
+ * <10K tokens → Haiku 4.5 (fast, cheap)
+ * 10K+ tokens → Sonnet 5 (better reasoning for large contexts)
+ * Opus 5 is opt-in from the UI, never auto-selected.
  */
 export function selectModel(contextTokens: number): string {
   if (contextTokens < 10_000) {
-    return "claude-haiku-4-5-20251001";
+    return MODEL_HAIKU;
   }
-  return "claude-sonnet-4-6";
+  return MODEL_SONNET;
 }
 
 // ─── BlockNote JSON → Plain Text ───

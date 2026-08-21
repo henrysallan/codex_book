@@ -32,6 +32,16 @@ function truncateToolResult(result: string): string {
 
 // ─── Tool Definitions (Anthropic format) ───
 
+/** Anthropic server-side web search. Executed by the API, not by executeTool. */
+export const WEB_SEARCH_TOOL: Anthropic.Messages.WebSearchTool20250305 = {
+  type: "web_search_20250305",
+  name: "web_search",
+  max_uses: 5,
+  // Direct calls work on Haiku 4.5 (no programmatic tool calling) as well as
+  // Sonnet 5 / Opus 5. Dynamic filtering would require code execution.
+  allowed_callers: ["direct"],
+};
+
 export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   {
     name: "search_notes",
@@ -550,6 +560,12 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       required: ["title", "markdown"],
     },
   },
+];
+
+/** Client note tools plus Anthropic web search, for the chat tool loop. */
+export const CHAT_TOOLS: Anthropic.Messages.ToolUnion[] = [
+  WEB_SEARCH_TOOL,
+  ...TOOL_DEFINITIONS,
 ];
 
 // ─── Helpers ───

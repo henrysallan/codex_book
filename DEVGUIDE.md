@@ -81,6 +81,7 @@ src/lib/
   store.ts    (1.2k)       Zustand store — the single source of client truth
   db.ts       (2.1k)       every Supabase query lives here
   types.ts                 Db* (snake_case rows) + client-side camelCase types
+  graph/                   full-database node graph (build, worker layout, canvas renderer)
   auth.tsx                 AuthProvider / useAuth, Google OAuth + Drive scope
   supabase.ts              browser client (anon key)
   supabaseServer.ts        server client (service role) — never import client-side
@@ -221,5 +222,5 @@ Postgres functions callable via `supabase.rpc(...)`: `search_documents` (FTS + t
 | New AI capability | add to `TOOL_DEFINITIONS` + `executeTool` in [tools.ts](src/lib/ai/tools.ts) |
 | Indexing / chunking | [indexDocument.ts](src/lib/ai/indexDocument.ts), [chunker.ts](src/lib/ai/chunker.ts) |
 | Any new persisted field | migration SQL + [types.ts](src/lib/types.ts) + [db.ts](src/lib/db.ts) + [store.ts](src/lib/store.ts) |
-| Dashboard widgets | [Dashboard.tsx](src/components/Dashboard.tsx), `initDashboard` in store |
+| Graph view | [GraphView.tsx](src/components/GraphView.tsx), `src/lib/graph/` |
 | Public sharing | [share/[slug]/](src/app/share/[slug]/), [shareSchema.tsx](src/lib/shareSchema.tsx) |

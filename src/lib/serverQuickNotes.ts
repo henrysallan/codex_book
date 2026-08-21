@@ -1,6 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
-import { localDateTag, dateTagsForLookup, dayContainerTitle } from "./dateTag";
+import { localDateTag, dateTagsForLookup, dayContainerTitle, isDateTag, titleFromDateTag } from "./dateTag";
 import { markdownToBlockNote } from "./markdownToBlocks";
 
 /**
@@ -101,9 +101,11 @@ async function insertDocument(
     parentDocumentId: string | null;
     docType: string;
     tags?: string[];
+    /** Explicit creation time, for backfilled notes. Defaults to now. */
+    createdAt?: Date;
   }
 ): Promise<DocumentRow> {
-  const now = new Date().toISOString();
+  const now = (fields.createdAt ?? new Date()).toISOString();
   const { data, error } = await admin
     .from("documents")
     .insert({
@@ -154,19 +156,32 @@ export async function ensureQuickNoteParent(
 }
 
 /**
- * Find or create today's day container.
+ * Find or create the day container for `now` — today by default.
  *
  * Lookup accepts both the local and the legacy UTC date tag (see dateTag.ts);
  * creation always uses the local one, so it agrees with the container's title.
+ *
+ * Taking a date rather than assuming today is what makes backfill correct: a
+ * note captured three weeks ago on the phone belongs in that day's container,
+ * not in today's. Without it, importing an existing device history dumps
+ * everything into one bucket with the wrong dates.
+ *
+ * `dateTagOverride` is the phone's civil date (`YYYY-MM-DD`). Vercel is UTC, so
+ * `localDateTag(capturedAt)` here is the UTC date and disagrees with the device
+ * in the evening in the US. When the client sends the tag, use it for both
+ * lookup and the new container's title.
  */
-export async function ensureTodayContainer(
+export async function ensureContainer(
   admin: SupabaseClient,
   userId: string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  dateTagOverride?: string,
+  options?: { sync?: boolean }
 ): Promise<DocumentRow> {
   const parent = await ensureQuickNoteParent(admin, userId);
-  const dateTag = localDateTag(now);
-  const lookupTags = dateTagsForLookup(now);
+  const hasOverride = typeof dateTagOverride === "string" && isDateTag(dateTagOverride);
+  const dateTag = hasOverride ? dateTagOverride : localDateTag(now);
+  const lookupTags = hasOverride ? [dateTag] : dateTagsForLookup(now);
 
   const { data: matches, error } = await admin
     .from("documents")
@@ -182,14 +197,17 @@ export async function ensureTodayContainer(
   if (existing) return existing as DocumentRow;
 
   const container = await insertDocument(admin, userId, {
-    title: dayContainerTitle(now),
+    title: hasOverride ? titleFromDateTag(dateTag) : dayContainerTitle(now),
     content: buildDayDatabaseContent([]),
     parentDocumentId: parent.id,
     docType: "note",
     tags: [dateTag],
+    createdAt: now,
   });
 
-  await syncQuickNoteDatabases(admin, userId, parent.id);
+  if (options?.sync !== false) {
+    await syncQuickNoteDatabases(admin, userId, parent.id);
+  }
   return container;
 }
 
@@ -271,6 +289,18 @@ export type CreateQuickNoteInput = {
   markdown?: string;
   /** Extra tags, e.g. trac3's classifier tags. `"quick note"` is always added. */
   tags?: string[];
+  /**
+   * When the note was actually captured. Drives both which day container it
+   * lands in and the row's `created_at`. Omit for live captures; trac3 sends it
+   * for every push so backfilled history keeps its real dates.
+   */
+  capturedAt?: Date;
+  /**
+   * Device-local `YYYY-MM-DD`. Preferred over `localDateTag(capturedAt)` because
+   * this code runs on Vercel (UTC) and would otherwise put evening US captures
+   * in tomorrow's folder.
+   */
+  dateTag?: string;
 };
 
 export type CreateQuickNoteResult = {
@@ -305,11 +335,30 @@ export async function createQuickNote(
       if (existing.user_id !== userId) {
         throw new Error("That document id belongs to another user");
       }
+      // First backfill created the row under today and later retries no-op'd.
+      // If the client now sends a capture date, move the note rather than
+      // leaving it in the wrong day container.
+      if (input.capturedAt || (input.dateTag && isDateTag(input.dateTag))) {
+        await refileQuickNotes(admin, userId, [
+          {
+            id: input.id,
+            capturedAt: input.capturedAt ?? new Date(existing.created_at),
+            dateTag: input.dateTag,
+          },
+        ]);
+        const { data: updated } = await admin
+          .from("documents")
+          .select("*")
+          .eq("id", input.id)
+          .maybeSingle();
+        return { document: (updated ?? existing) as DocumentRow, created: false };
+      }
       return { document: existing as DocumentRow, created: false };
     }
   }
 
-  const container = await ensureTodayContainer(admin, userId);
+  const capturedAt = input.capturedAt ?? new Date();
+  const container = await ensureContainer(admin, userId, capturedAt, input.dateTag);
 
   const content =
     input.markdown && input.markdown.trim()
@@ -325,6 +374,7 @@ export async function createQuickNote(
     parentDocumentId: container.id,
     docType: "note",
     tags,
+    createdAt: capturedAt,
   });
 
   if (container.parent_document_id) {
@@ -332,4 +382,99 @@ export async function createQuickNote(
   }
 
   return { document, created: true };
+}
+
+// ─── Refile ───
+
+export type RefileQuickNoteItem = {
+  id: string;
+  capturedAt: Date;
+  dateTag?: string;
+};
+
+function isRefileableQuickNote(doc: DocumentRow): boolean {
+  if (doc.doc_type === "quick_note_parent") return false;
+  const tags = doc.tags ?? [];
+  if (tags.includes(QUICK_NOTE_TAG)) return true;
+  // Day containers are tagged with a single YYYY-MM-DD. Never nest those.
+  if (tags.length === 1 && isDateTag(tags[0])) return false;
+  return false;
+}
+
+/**
+ * Move existing quick notes into the day container for their real capture date
+ * and rewrite `created_at`. One parent-table rebuild at the end.
+ *
+ * Cortex's Date column is the day container's tag (`qn-parent-date`), not the
+ * note's `created_at`. Patching timestamps alone leaves every backfilled note
+ * sitting under today.
+ */
+export async function refileQuickNotes(
+  admin: SupabaseClient,
+  userId: string,
+  items: RefileQuickNoteItem[]
+): Promise<{ refiled: number; skipped: number }> {
+  if (items.length === 0) return { refiled: 0, skipped: 0 };
+
+  const parent = await ensureQuickNoteParent(admin, userId);
+  const ids = [...new Set(items.map((item) => item.id))];
+  const { data: rows, error } = await admin
+    .from("documents")
+    .select("*")
+    .in("id", ids)
+    .eq("user_id", userId);
+  if (error) throw error;
+
+  const byId = new Map((rows ?? []).map((row) => [row.id, row as DocumentRow]));
+  const containers = new Map<string, DocumentRow>();
+
+  let refiled = 0;
+  let skipped = 0;
+
+  for (const item of items) {
+    const doc = byId.get(item.id);
+    if (!doc || !isRefileableQuickNote(doc)) {
+      skipped += 1;
+      continue;
+    }
+
+    const dateTag =
+      item.dateTag && isDateTag(item.dateTag) ? item.dateTag : localDateTag(item.capturedAt);
+
+    let container = containers.get(dateTag);
+    if (!container) {
+      container = await ensureContainer(admin, userId, item.capturedAt, dateTag, { sync: false });
+      containers.set(dateTag, container);
+    }
+
+    const createdAtIso = item.capturedAt.toISOString();
+    const alreadyThere = doc.parent_document_id === container.id;
+    const createdMatches =
+      new Date(doc.created_at).toISOString().slice(0, 19) === createdAtIso.slice(0, 19);
+    if (alreadyThere && createdMatches) {
+      skipped += 1;
+      continue;
+    }
+
+    const { error: updateError } = await admin
+      .from("documents")
+      .update({
+        parent_document_id: container.id,
+        created_at: createdAtIso,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", doc.id)
+      .eq("user_id", userId);
+    if (updateError) throw updateError;
+
+    doc.parent_document_id = container.id;
+    doc.created_at = createdAtIso;
+    refiled += 1;
+  }
+
+  if (refiled > 0) {
+    await syncQuickNoteDatabases(admin, userId, parent.id);
+  }
+
+  return { refiled, skipped };
 }

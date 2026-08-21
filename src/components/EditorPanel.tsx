@@ -27,10 +27,20 @@ const MoodboardCanvas = dynamic(() => import("@/components/MoodboardCanvas").the
   ),
 });
 
+const GraphView = dynamic(() => import("@/components/GraphView").then((m) => m.GraphView), {
+  ssr: false,
+  loading: () => (
+    <div className="h-full flex items-center justify-center text-muted-foreground gap-2">
+      <Loader2 size={16} className="animate-spin" /> Loading graph…
+    </div>
+  ),
+});
+
 export function EditorPanel() {
   const activeDocument = useAppStore((s) => s.activeDocument);
   const activeDocumentId = useAppStore((s) => s.activeDocumentId);
   const openTabs = useAppStore((s) => s.openTabs);
+  const isGraphOpen = useAppStore((s) => s.isGraphOpen);
 
   // Check if current tab is a Drive file
   const activeDriveTab = openTabs.find(
@@ -46,8 +56,10 @@ export function EditorPanel() {
       <TabBar />
 
       {/* Editor area */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        {showDashboard ? (
+      <div className={`flex-1 min-h-0 ${isGraphOpen ? "overflow-hidden" : "overflow-y-auto"}`}>
+        {isGraphOpen ? (
+          <GraphView />
+        ) : showDashboard ? (
           <Dashboard />
         ) : activeDriveTab?.driveFile ? (
           <FileViewer
@@ -72,7 +84,7 @@ export function EditorPanel() {
       </div>
 
       {/* Search bar at bottom */}
-      {activeDocument?.docType !== "moodboard" && <SearchBar />}
+      {!isGraphOpen && activeDocument?.docType !== "moodboard" && <SearchBar />}
     </div>
   );
 }

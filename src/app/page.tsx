@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, shouldHandleFileUndo } from "@/lib/store";
 import { useAuth } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { Sidebar } from "@/components/Sidebar";
@@ -10,6 +10,17 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { CommandPalette } from "@/components/CommandPalette";
 import { LoginScreen } from "@/components/LoginScreen";
 import { SettingsModal } from "@/components/SettingsModal";
+
+function isNativeField(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+function isEditorTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || Boolean(target.closest("[contenteditable='true']"));
+}
 
 export default function Home() {
   const { user, isLoading: authLoading } = useAuth();
@@ -61,10 +72,26 @@ export default function Home() {
   // Global keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      // Cmd+P / Ctrl+P => fuzzy finder
       if ((e.metaKey || e.ctrlKey) && e.key === "p") {
         e.preventDefault();
         setIsCommandPaletteOpen(true);
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "z" || e.key === "Z")) {
+        if (e.defaultPrevented) return;
+        if (isNativeField(e.target)) return;
+        const inEditor = isEditorTarget(e.target);
+        const { undo, redo } = useAppStore.getState();
+        if (e.shiftKey) {
+          if (!shouldHandleFileUndo("redo", inEditor)) return;
+          e.preventDefault();
+          void redo();
+        } else {
+          if (!shouldHandleFileUndo("undo", inEditor)) return;
+          e.preventDefault();
+          void undo();
+        }
       }
     },
     []

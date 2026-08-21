@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/serverAuth";
 import { getServerSupabase } from "@/lib/supabaseServer";
+import { isDateTag } from "@/lib/dateTag";
 import { createQuickNote } from "@/lib/serverQuickNotes";
 import { indexDocument } from "@/lib/ai/indexDocument";
 
@@ -35,7 +36,22 @@ export const maxDuration = 60;
  * existing document with `created: false` instead of duplicating it, so the
  * offline outbox can retry freely.
  *
- * Request:  { id?, text, markdown?, tags?, index? }
+ * BACKFILL
+ * --------
+ * `capturedAt` (ISO 8601) places the note in the day container for the date it
+ * was actually captured and sets the row's `created_at` accordingly. trac3 sends
+ * it on every push, which is what lets an existing device history import with
+ * its real dates instead of collapsing into today.
+ *
+ * `dateTag` (`YYYY-MM-DD` on the device calendar) is preferred over deriving the
+ * day from `capturedAt` on the server. This route runs in UTC on Vercel, so an
+ * evening capture in the US would otherwise land in tomorrow's folder.
+ *
+ * Re-posting an existing `id` with `capturedAt`/`dateTag` moves the note into
+ * the matching day container instead of no-op'ing. That is how a first backfill
+ * that dumped everything under today can be repaired without duplicating rows.
+ *
+ * Request:  { id?, text, markdown?, tags?, capturedAt?, dateTag?, index? }
  * Response: { documentId, created, title, containerId, indexed }
  */
 export async function POST(req: NextRequest) {
@@ -52,6 +68,8 @@ export async function POST(req: NextRequest) {
     text?: string;
     markdown?: string;
     tags?: string[];
+    capturedAt?: string;
+    dateTag?: string;
     index?: boolean;
   };
   try {
@@ -65,6 +83,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing required field: text" }, { status: 400 });
   }
 
+  // Ignore an unparseable or absurd timestamp rather than rejecting the note —
+  // a capture is worth more than its metadata. Future dates are clamped to now
+  // so a device with a wrong clock can't create containers years ahead.
+  let capturedAt: Date | undefined;
+  if (typeof body.capturedAt === "string") {
+    const parsed = new Date(body.capturedAt);
+    if (!Number.isNaN(parsed.getTime())) {
+      capturedAt = parsed.getTime() > Date.now() ? new Date() : parsed;
+    }
+  }
+
+  const dateTag =
+    typeof body.dateTag === "string" && isDateTag(body.dateTag) ? body.dateTag : undefined;
+
   let result;
   try {
     result = await createQuickNote(admin, auth.id, {
@@ -72,6 +104,8 @@ export async function POST(req: NextRequest) {
       text,
       markdown: body.markdown,
       tags: Array.isArray(body.tags) ? body.tags.filter((t) => typeof t === "string") : undefined,
+      capturedAt,
+      dateTag,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
