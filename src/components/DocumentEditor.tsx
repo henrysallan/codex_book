@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, isNewerTimestamp } from "@/lib/store";
 import { Document, Annotation, NoteSettings } from "@/lib/types";
 import { parseBacklinks, syncBacklinks, createDocument as dbCreateDocument, keepalivePatchDocument, StaleWriteError, dbDocumentToDocument } from "@/lib/db";
 import { schema } from "@/lib/editorSchema";
@@ -38,6 +38,57 @@ import { AnnotationChat } from "@/components/AnnotationChat";
 import { NoteSettingsButton } from "@/components/NoteSettingsButton";
 
 import { authedFetch } from "@/lib/apiFetch";
+type SyncStatus = "synced" | "pending" | "saving" | "conflict" | "error";
+
+type RemoteDocument = {
+  content: string;
+  updatedAt: string;
+  title: string;
+  subtitle: string | null;
+};
+
+// ─── Own-write memory ───
+//
+// `documents.updated_at` moves on every update, including the indexer's
+// bookkeeping writes, so a timestamp mismatch alone does not mean someone else
+// edited the note. We remember (hashes of) every content string this client has
+// loaded, sent, or adopted per document; a server row whose content is one of
+// ours is never a conflict. Module-level so an editor remounted right after a
+// document switch still recognises a flush the previous instance sent.
+
+const OWN_WRITE_LIMIT = 8;
+const ownWritesByDoc = new Map<string, string[]>();
+
+function hashContent(s: string): string {
+  // Two independent FNV-1a style 32-bit hashes; plenty for "is this string one
+  // of the handful we wrote" and much cheaper than keeping the strings around.
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ c, 0x0100019b) ^ (h2 >>> 13);
+  }
+  return `${s.length}:${(h1 >>> 0).toString(16)}:${(h2 >>> 0).toString(16)}`;
+}
+
+function rememberOwnWrite(docId: string, content: string): void {
+  const h = hashContent(content);
+  const list = ownWritesByDoc.get(docId) ?? [];
+  if (list.includes(h)) return;
+  list.push(h);
+  if (list.length > OWN_WRITE_LIMIT) list.shift();
+  ownWritesByDoc.set(docId, list);
+}
+
+function isOwnWrite(docId: string, content: string): boolean {
+  return ownWritesByDoc.get(docId)?.includes(hashContent(content)) ?? false;
+}
+
+/** A save that has not resolved in this long no longer blocks the next one. */
+const SAVE_STALL_MS = 20_000;
+let saveTokenCounter = 0;
+
 interface DocumentEditorProps {
   document: Document;
 }
@@ -383,11 +434,21 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
   const [tagInput, setTagInput] = useState("");
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const indexTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [syncStatus, setSyncStatus] = useState<"synced" | "pending" | "saving" | "error">("synced");
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("synced");
   const syncStatusRef = useRef(syncStatus);
   syncStatusRef.current = syncStatus;
+  /** True while we are replacing blocks ourselves, so onChange must not autosave. */
   const seedingRef = useRef(false);
+  /** The server row this editor last loaded, saved, or adopted. */
   const baseUpdatedAtRef = useRef(document.updatedAt);
+  const baseContentRef = useRef(document.content);
+  /** The save currently in flight, if any, and whether another was requested meanwhile. */
+  const saveRunRef = useRef<{ token: number; startedAt: number } | null>(null);
+  const queuedSaveRef = useRef<{ flush: boolean } | null>(null);
+  const persistRef = useRef<(opts?: { flush?: boolean }) => Promise<void>>(async () => {});
+  /** A foreign version of this document that a save collided with. */
+  const [conflict, setConflict] = useState<RemoteDocument | null>(null);
+  const conflictRef = useRef<RemoteDocument | null>(null);
   const titleRef = useRef(title);
   const subtitleRef = useRef(subtitle);
   titleRef.current = title;
@@ -613,6 +674,14 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
   );
 
   // ─── Auto-save on content change ───
+  //
+  // Saves are guarded by `updated_at` (see updateDocument). The row's
+  // `updated_at` also moves for writes that are not edits — the indexer's
+  // bookkeeping, a title/settings save, a keepalive flush — so a mismatch alone
+  // is not a conflict. We remember every content string this client has loaded
+  // or written; if the server's content is one of ours, we adopt its timestamp
+  // and retry. Only genuinely foreign content is surfaced as a conflict, and
+  // then the local blocks are kept until the user picks a side.
 
   const triggerIndex = useCallback((docId: string) => {
     authedFetch("/api/ai/index", {
@@ -624,8 +693,33 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
     );
   }, []);
 
+  const scheduleIndex = useCallback(
+    (immediate: boolean) => {
+      if (indexTimeoutRef.current) {
+        clearTimeout(indexTimeoutRef.current);
+        indexTimeoutRef.current = null;
+      }
+      if (immediate) {
+        triggerIndex(document.id);
+        return;
+      }
+      indexTimeoutRef.current = setTimeout(() => {
+        indexTimeoutRef.current = null;
+        triggerIndex(document.id);
+      }, 30_000);
+    },
+    [document.id, triggerIndex]
+  );
+
+  useEffect(() => {
+    rememberOwnWrite(document.id, document.content);
+    // Mount-scoped: the content this editor instance was seeded from.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [document.id]);
+
+  /** Replace the editor's blocks with a server version and treat it as the new base. */
   const applyRemoteDocument = useCallback(
-    (remote: { content: string; updatedAt: string; title: string; subtitle: string | null }) => {
+    (remote: RemoteDocument) => {
       seedingRef.current = true;
       try {
         const parsed = JSON.parse(remote.content);
@@ -639,91 +733,145 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
           seedingRef.current = false;
         });
       }
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
       baseUpdatedAtRef.current = remote.updatedAt;
+      baseContentRef.current = remote.content;
+      rememberOwnWrite(document.id, remote.content);
+      conflictRef.current = null;
+      setConflict(null);
       setTitle(remote.title);
       setSubtitle(remote.subtitle || "");
       setSyncStatus("synced");
       setLastSavedAt(Date.parse(remote.updatedAt) || Date.now());
     },
-    [editor]
+    [editor, document.id]
   );
 
-  const persistContent = useCallback(
-    async (opts?: { fromUnload?: boolean }) => {
-      const blocks = editor.document;
-      const content = JSON.stringify(blocks);
-      const expectedUpdatedAt = baseUpdatedAtRef.current;
-      const titleNow = titleRef.current.trim() || "Untitled";
-      const subtitleNow = subtitleRef.current;
-      const meta: { title?: string; subtitle?: string | null } = {};
-      if (titleNow !== document.title) meta.title = titleNow;
-      if (subtitleNow !== (document.subtitle || "")) meta.subtitle = subtitleNow || null;
+  const collectMeta = useCallback(() => {
+    const meta: { title?: string; subtitle?: string | null } = {};
+    const titleNow = titleRef.current.trim() || "Untitled";
+    const subtitleNow = subtitleRef.current;
+    if (titleNow !== document.title) meta.title = titleNow;
+    if (subtitleNow !== (document.subtitle || "")) meta.subtitle = subtitleNow || null;
+    return meta;
+  }, [document.title, document.subtitle]);
 
-      if (opts?.fromUnload) {
-        keepalivePatchDocument(
-          document.id,
-          { content, ...meta },
-          expectedUpdatedAt
-        );
-        return;
-      }
+  const runSave = useCallback(
+    async (opts: { flush: boolean }) => {
+      const idle = () => !saveTimeoutRef.current && !queuedSaveRef.current;
+      let adoptions = 0;
 
-      setSyncStatus("saving");
-      try {
-        await saveDocument(document.id, {
-          content,
-          ...meta,
-          ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}),
-        });
+      for (;;) {
+        const content = JSON.stringify(editor.document);
+        const meta = collectMeta();
+        const hasMeta = meta.title !== undefined || meta.subtitle !== undefined;
 
-        try {
-          const targetIds = parseBacklinks(content, _dbDocuments);
-          await syncBacklinks(document.id, targetIds);
-        } catch (err) {
-          console.error("Failed to sync backlinks:", err);
-        }
-
-        const savedAt =
-          useAppStore.getState().activeDocument?.updatedAt ??
-          new Date().toISOString();
-        baseUpdatedAtRef.current = savedAt;
-        setSyncStatus("synced");
-        setLastSavedAt(Date.now());
-
-        if (indexTimeoutRef.current) clearTimeout(indexTimeoutRef.current);
-        indexTimeoutRef.current = setTimeout(() => {
-          triggerIndex(document.id);
-        }, 30_000);
-      } catch (err) {
-        if (err instanceof StaleWriteError) {
-          console.warn("[editor] Stale write — reloading newer version");
-          const mapped = dbDocumentToDocument(err.current);
-          applyRemoteDocument({
-            content: mapped.content,
-            updatedAt: mapped.updatedAt,
-            title: mapped.title,
-            subtitle: mapped.subtitle,
-          });
+        if (content === baseContentRef.current && !hasMeta) {
+          // The server already has this exact content.
+          if (idle()) setSyncStatus("synced");
+          if (opts.flush && indexTimeoutRef.current) scheduleIndex(true);
           return;
         }
-        console.error("Failed to save document:", err);
-        setSyncStatus("error");
+
+        setSyncStatus("saving");
+        rememberOwnWrite(document.id, content);
+        const expectedUpdatedAt = baseUpdatedAtRef.current;
+
+        try {
+          const saved = await saveDocument(document.id, {
+            content,
+            ...meta,
+            ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}),
+          });
+          baseUpdatedAtRef.current = saved.updatedAt;
+          baseContentRef.current = saved.content;
+          rememberOwnWrite(document.id, saved.content);
+          conflictRef.current = null;
+          setConflict(null);
+
+          try {
+            const targetIds = parseBacklinks(content, _dbDocuments);
+            await syncBacklinks(document.id, targetIds);
+          } catch (err) {
+            console.error("Failed to sync backlinks:", err);
+          }
+
+          setLastSavedAt(Date.now());
+          if (idle()) setSyncStatus("synced");
+          scheduleIndex(opts.flush);
+          return;
+        } catch (err) {
+          if (err instanceof StaleWriteError) {
+            const remote = dbDocumentToDocument(err.current);
+            if (isOwnWrite(document.id, remote.content) && adoptions < 3) {
+              // updated_at moved but the content is ours (index bookkeeping,
+              // a keepalive flush, a meta save). Adopt the timestamp and retry.
+              adoptions++;
+              baseUpdatedAtRef.current = remote.updatedAt;
+              baseContentRef.current = remote.content;
+              continue;
+            }
+            if (opts.flush) {
+              console.warn(
+                "[editor] Dropped flush for document changed elsewhere:",
+                document.id
+              );
+              return;
+            }
+            console.warn("[editor] Document changed elsewhere — holding local edits");
+            conflictRef.current = remote;
+            setConflict(remote);
+            setSyncStatus("conflict");
+            return;
+          }
+          console.error("Failed to save document:", err);
+          setSyncStatus("error");
+          return;
+        }
       }
     },
-    [
-      editor,
-      document.id,
-      document.title,
-      document.subtitle,
-      saveDocument,
-      _dbDocuments,
-      triggerIndex,
-      applyRemoteDocument,
-    ]
+    [editor, document.id, saveDocument, _dbDocuments, collectMeta, scheduleIndex]
   );
+
+  /**
+   * Serialised entry point for saves. A second call while one is in flight is
+   * queued and run once, after the first completes, so two saves never race on
+   * the same base timestamp.
+   */
+  const persistContent = useCallback(
+    async (opts?: { flush?: boolean }) => {
+      const flush = opts?.flush === true;
+      const running = saveRunRef.current;
+      if (running && Date.now() - running.startedAt < SAVE_STALL_MS) {
+        queuedSaveRef.current = {
+          flush: flush || (queuedSaveRef.current?.flush ?? false),
+        };
+        return;
+      }
+      const token = ++saveTokenCounter;
+      saveRunRef.current = { token, startedAt: Date.now() };
+      try {
+        await runSave({ flush });
+      } finally {
+        if (saveRunRef.current?.token === token) {
+          saveRunRef.current = null;
+          const queued = queuedSaveRef.current;
+          queuedSaveRef.current = null;
+          if (queued) void persistRef.current(queued);
+        }
+      }
+    },
+    [runSave]
+  );
+  persistRef.current = persistContent;
 
   const handleEditorChange = useCallback(() => {
     if (seedingRef.current) return;
+    // While a conflict banner is up, hold edits locally until the user decides.
+    if (conflictRef.current) return;
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
@@ -734,11 +882,54 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
     }, 1000);
   }, [persistContent]);
 
-  // Re-seed BlockNote when a background refresh brings a newer version and
-  // this editor has nothing pending.
+  // Conflict banner actions.
+  const resolveKeepMine = useCallback(() => {
+    const remote = conflictRef.current;
+    if (!remote) return;
+    // Overwrite on top of the remote version, deliberately.
+    baseUpdatedAtRef.current = remote.updatedAt;
+    conflictRef.current = null;
+    setConflict(null);
+    setSyncStatus("pending");
+    void persistContent();
+  }, [persistContent]);
+
+  const resolveLoadTheirs = useCallback(() => {
+    const remote = conflictRef.current;
+    if (!remote) return;
+    // Prefer whatever the store has if a later foreign save arrived meanwhile.
+    const latest = useAppStore.getState().activeDocument;
+    const newest =
+      latest && latest.id === document.id && isNewerTimestamp(latest.updatedAt, remote.updatedAt)
+        ? { content: latest.content, updatedAt: latest.updatedAt, title: latest.title, subtitle: latest.subtitle }
+        : remote;
+    applyRemoteDocument(newest);
+  }, [applyRemoteDocument, document.id]);
+
+  // React to the store handing us a different version of this document.
   useEffect(() => {
-    if (syncStatusRef.current !== "synced") return;
     if (!document.updatedAt || document.updatedAt === baseUpdatedAtRef.current) {
+      return;
+    }
+    // An older row (a slow refetch that lost the race with our save) is noise.
+    if (isNewerTimestamp(baseUpdatedAtRef.current, document.updatedAt)) return;
+
+    if (isOwnWrite(document.id, document.content)) {
+      // The row moved without a foreign edit (index bookkeeping, a title or
+      // settings save, our own flush). Adopt the timestamp, leave the blocks.
+      baseUpdatedAtRef.current = document.updatedAt;
+      baseContentRef.current = document.content;
+      return;
+    }
+
+    // Foreign content. Only swap it in when nothing local is unsaved;
+    // otherwise the next save detects the conflict and asks.
+    if (
+      syncStatusRef.current !== "synced" ||
+      saveTimeoutRef.current ||
+      saveRunRef.current ||
+      queuedSaveRef.current
+    ) {
       return;
     }
     applyRemoteDocument({
@@ -747,7 +938,14 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
       title: document.title,
       subtitle: document.subtitle,
     });
-  }, [document.updatedAt, document.content, document.title, document.subtitle, applyRemoteDocument]);
+  }, [
+    document.id,
+    document.updatedAt,
+    document.content,
+    document.title,
+    document.subtitle,
+    applyRemoteDocument,
+  ]);
 
   // Flush pending save + index on unmount (doc switch, tab close).
   useEffect(() => {
@@ -755,56 +953,51 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = null;
-        const content = JSON.stringify(editor.document);
-        const titleNow = titleRef.current.trim() || "Untitled";
-        const subtitleNow = subtitleRef.current;
-        const meta: { title?: string; subtitle?: string | null } = {};
-        if (titleNow !== document.title) meta.title = titleNow;
-        if (subtitleNow !== (document.subtitle || "")) {
-          meta.subtitle = subtitleNow || null;
-        }
-        void saveDocument(document.id, {
-          content,
-          ...meta,
-          ...(baseUpdatedAtRef.current
-            ? { expectedUpdatedAt: baseUpdatedAtRef.current }
-            : {}),
-        })
-          .then(() => triggerIndex(document.id))
-          .catch((err) => {
-            if (!(err instanceof StaleWriteError)) {
-              console.error("Failed to flush document on unmount:", err);
-            }
-          });
+      }
+      if (syncStatusRef.current !== "synced") {
+        void persistRef.current({ flush: true });
       } else if (indexTimeoutRef.current) {
         clearTimeout(indexTimeoutRef.current);
+        indexTimeoutRef.current = null;
         triggerIndex(document.id);
       }
     };
-    // Intentionally mount-scoped: flush the editor instance that was open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [document.id]);
+  }, [document.id, triggerIndex]);
 
-  // Warn on window close and keepalive-flush unsaved content.
+  // Save when the tab is hidden; keepalive-flush and warn on unload.
   useEffect(() => {
-    const flushIfDirty = () => {
-      if (syncStatusRef.current === "synced") return;
+    const keepaliveFlush = () => {
+      if (syncStatusRef.current === "synced" || conflictRef.current) return;
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = null;
       }
-      void persistContent({ fromUnload: true });
+      const content = JSON.stringify(editor.document);
+      rememberOwnWrite(document.id, content);
+      keepalivePatchDocument(
+        document.id,
+        { content, ...collectMeta() },
+        baseUpdatedAtRef.current
+      );
     };
 
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (syncStatusRef.current === "synced") return;
-      flushIfDirty();
+      keepaliveFlush();
       e.preventDefault();
       e.returnValue = "";
     };
-    const onPageHide = () => flushIfDirty();
+    const onPageHide = () => keepaliveFlush();
     const onVisibility = () => {
-      if (window.document.visibilityState === "hidden") flushIfDirty();
+      if (window.document.visibilityState !== "hidden") return;
+      if (syncStatusRef.current === "synced" || conflictRef.current) return;
+      // The page is still alive here, so use the normal guarded save: it can
+      // adopt a moved timestamp and it updates our base on success.
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+      void persistContent();
     };
 
     window.addEventListener("beforeunload", onBeforeUnload);
@@ -815,7 +1008,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
       window.removeEventListener("pagehide", onPageHide);
       window.document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [persistContent]);
+  }, [editor, document.id, collectMeta, persistContent]);
 
   // ─── Title / subtitle / tags handlers ───
 
@@ -915,6 +1108,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
               syncStatus === "synced" ? "All changes saved" :
               syncStatus === "pending" ? "Unsaved changes" :
               syncStatus === "saving" ? "Saving…" :
+              syncStatus === "conflict" ? "Changed elsewhere — unsaved" :
               "Save failed"
             }
           >
@@ -925,6 +1119,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
                   syncStatus === "synced" ? "#22c55e" :
                   syncStatus === "pending" ? "#eab308" :
                   syncStatus === "saving" ? "#eab308" :
+                  syncStatus === "conflict" ? "#f97316" :
                   "#ef4444",
                 boxShadow:
                   syncStatus === "error" ? "0 0 4px rgba(239,68,68,0.5)" : undefined,
@@ -941,6 +1136,32 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
           <NoteSettingsButton settings={noteSettings} onChange={handleSettingsChange} docId={document.id} shareSlug={document.shareSlug} />
         </div>
       </div>
+      )}
+      {/* Conflict banner: a save collided with a version written elsewhere */}
+      {conflict && !isIndexDoc && (
+        <div className="sticky top-0 z-20 h-0 pointer-events-none">
+          <div className="flex justify-center px-3 pt-8">
+            <div className="pointer-events-auto flex items-center gap-2 rounded-md border border-border bg-sidebar-bg px-3 py-1.5 text-xs shadow-sm">
+              <span className="text-muted-foreground">
+                This note was changed elsewhere. Your edits here are unsaved.
+              </span>
+              <button
+                type="button"
+                onClick={resolveLoadTheirs}
+                className="px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-black/5 transition-colors"
+              >
+                Load theirs
+              </button>
+              <button
+                type="button"
+                onClick={resolveKeepMine}
+                className="px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-black/5 transition-colors"
+              >
+                Keep mine
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       <div
         className={`px-14 py-12 ${noteSettings.fullWidth ? '' : 'max-w-[800px]'}`}
@@ -988,28 +1209,20 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
               setEntryInput("");
               if (document.docType === "todo") {
                 await addTodo(text);
-                // Update editor from cache — addTodo already persisted & cached
-                try {
-                  const cached = useAppStore.getState()._documentCache.get(document.id);
-                  if (cached) {
-                    const parsed = JSON.parse(cached.content);
-                    if (Array.isArray(parsed)) {
-                      editor.replaceBlocks(editor.document, parsed);
-                    }
-                  }
-                } catch { /* ignore */ }
               } else {
                 await addQuickNote(text);
-                // Refresh editor blocks — database block was synced
-                try {
-                  const cached = useAppStore.getState()._documentCache.get(document.id);
-                  if (cached) {
-                    const parsed = JSON.parse(cached.content);
-                    if (Array.isArray(parsed)) {
-                      editor.replaceBlocks(editor.document, parsed);
-                    }
-                  }
-                } catch { /* ignore */ }
+              }
+              // The store already persisted and cached the rewritten blocks.
+              // Seed the editor from the cache as a remote version so the
+              // change is adopted as our own rather than autosaved again.
+              const cached = useAppStore.getState()._documentCache.get(document.id);
+              if (cached) {
+                applyRemoteDocument({
+                  content: cached.content,
+                  updatedAt: cached.updatedAt,
+                  title: cached.title,
+                  subtitle: cached.subtitle,
+                });
               }
               entryInputRef.current?.focus();
             }}

@@ -57,7 +57,7 @@ function nextDocumentFetchGen(id: string): number {
   return n;
 }
 
-function isNewerTimestamp(a: string | undefined, b: string | undefined): boolean {
+export function isNewerTimestamp(a: string | undefined, b: string | undefined): boolean {
   if (!a || !b) return false;
   const da = Date.parse(a);
   const db = Date.parse(b);
@@ -259,7 +259,7 @@ interface AppState {
       settings: import("./types").NoteSettings;
       expectedUpdatedAt: string;
     }>
-  ) => Promise<void>;
+  ) => Promise<Document>;
   deleteDocument: (id: string) => Promise<void>;
   moveDocument: (docId: string, folderId: string | null) => Promise<void>;
   moveFolder: (folderId: string, parentId: string | null, parentDocumentId?: string | null) => Promise<void>;
@@ -398,6 +398,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           fetchDocument(workspace.activeDocumentId).then((dbDoc) => {
             if (!dbDoc) return;
             const doc = dbDocumentToDocument(dbDoc);
+            const existing = get()._documentCache.get(doc.id);
+            if (isNewerTimestamp(existing?.updatedAt, doc.updatedAt)) return;
             const cache = new Map(get()._documentCache);
             cache.set(doc.id, doc);
             if (get().activeDocumentId === doc.id) {
@@ -733,17 +735,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   saveDocument: async (id, updates) => {
     const { expectedUpdatedAt, ...fields } = updates;
-    let saved;
-    try {
-      saved = await dbUpdateDocument(
-        id,
-        fields,
-        expectedUpdatedAt ? { expectedUpdatedAt } : undefined
-      );
-    } catch (err) {
-      if (err instanceof StaleWriteError) throw err;
-      throw err;
-    }
+    // Throws StaleWriteError when expectedUpdatedAt no longer matches the row.
+    const saved = await dbUpdateDocument(
+      id,
+      fields,
+      expectedUpdatedAt ? { expectedUpdatedAt } : undefined
+    );
 
     const mapped = dbDocumentToDocument(saved);
 
@@ -792,6 +789,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ _dbDocuments: docs.map((d) => d.id === id ? { ...d, title: updates.title! } : d) });
       get()._rebuildTree();
     }
+
+    return mapped;
   },
 
   deleteDocument: async (id: string) => {
@@ -1442,16 +1441,26 @@ async function persistTodoMutation(
     mutate(blocks);
     const content = JSON.stringify(blocks);
     try {
-      await dbUpdateDocument(
+      const saved = await dbUpdateDocument(
         todoDocId,
         { content },
         { expectedUpdatedAt: dbDoc.updated_at }
       );
-      const cache = new Map(useAppStore.getState()._documentCache);
+      // Carry the new updated_at along with the content so an open editor can
+      // adopt this write as its own instead of treating it as a stale conflict.
+      const state = useAppStore.getState();
+      const cache = new Map(state._documentCache);
+      const patch = { content, updatedAt: saved.updated_at };
       if (cache.has(todoDocId)) {
-        cache.set(todoDocId, { ...cache.get(todoDocId)!, content });
-        useAppStore.setState({ _documentCache: cache });
+        cache.set(todoDocId, { ...cache.get(todoDocId)!, ...patch });
       }
+      const active = state.activeDocument;
+      useAppStore.setState({
+        _documentCache: cache,
+        ...(active && active.id === todoDocId
+          ? { activeDocument: { ...active, ...patch } }
+          : {}),
+      });
       return;
     } catch (err) {
       if (err instanceof StaleWriteError && attempt < 2) continue;

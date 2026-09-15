@@ -130,13 +130,15 @@ component → useAppStore action → db.ts function → Supabase
 
 [DocumentEditor.tsx](src/components/DocumentEditor.tsx) owns one BlockNote instance per document (`key={document.id}` forces remount on switch). On every change:
 
-1. **1s debounce** → `saveDocument(id, { content })` → Supabase update.
+1. **1s debounce** → `saveDocument(id, { content, expectedUpdatedAt })` → Supabase update guarded by `updated_at`.
 2. Then `parseBacklinks` + `syncBacklinks` (handles both `[[wikilinks]]` and `pageLink` inline nodes).
 3. Then a **30s debounce** → `POST /api/ai/index` to re-embed the document.
 
-There is **no CRDT and no conflict resolution** — last write wins on the whole `content` column. Two open tabs on the same doc will clobber each other.
+Saves are serialised (one in flight, at most one queued) and flushed on document switch, tab hide, and unload.
 
-Sync state is surfaced via a local `syncStatus` (`pending | saving | synced | error`).
+**Conflict handling — no CRDT, a version guard instead.** Every write sends the `updated_at` it was based on; a mismatch throws `StaleWriteError`. The catch: the `documents_updated_at` trigger bumps `updated_at` on *every* update, including the indexer's bookkeeping (`index_status`, `ai_summary`, `content_hash`), a title/settings save, or a keepalive flush — none of which are edits. So the editor remembers hashes of every content string it has loaded or written (`rememberOwnWrite` / `isOwnWrite`). If the server row's content is one of ours, the new timestamp is adopted and the save retried; the user's blocks are never touched. Only genuinely foreign content is a conflict: the editor keeps the local blocks, stops autosaving, and shows a banner (**Load theirs** / **Keep mine**). A background refresh with foreign content re-seeds the editor only when nothing local is unsaved. Do not add server-side writes that rewrite `content` behind an open editor without going through this path — and never call `editor.replaceBlocks` from autosave code; use `applyRemoteDocument`.
+
+Sync state is surfaced via a local `syncStatus` (`pending | saving | synced | conflict | error`).
 
 ---
 
