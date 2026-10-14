@@ -369,7 +369,7 @@ export function DatabaseTable({ block, editor }: DatabaseTableProps) {
                 <th className="db-th db-add-col">
                   <button
                     onClick={addColumn}
-                    className="p-1 rounded transition-colors text-gray-400 hover:text-gray-600"
+                    className="p-1 rounded transition-colors text-muted hover:text-muted-foreground"
                   >
                     <Plus size={14} />
                   </button>
@@ -382,7 +382,7 @@ export function DatabaseTable({ block, editor }: DatabaseTableProps) {
               <tr>
                 <td
                   colSpan={columns.length}
-                  className="db-td text-center text-gray-400 text-sm py-6"
+                  className="db-td text-center text-muted text-sm py-6"
                 >
                   No rows yet. Click + to add one.
                 </td>
@@ -438,7 +438,7 @@ export function DatabaseTable({ block, editor }: DatabaseTableProps) {
               <td colSpan={columns.length} className="db-td" style={{ borderBottom: 0 }}>
                 {isAddingRow ? (
                   <div className="flex items-center gap-1">
-                    <Plus size={14} className="text-gray-400 flex-shrink-0" />
+                    <Plus size={14} className="text-muted flex-shrink-0" />
                     <input
                       ref={newRowInputRef}
                       value={newRowTitle}
@@ -451,13 +451,13 @@ export function DatabaseTable({ block, editor }: DatabaseTableProps) {
                       onBlur={commitNewRow}
                       onMouseDown={(e) => e.stopPropagation()}
                       placeholder="Enter title…"
-                      className="flex-1 bg-transparent outline-none text-sm text-gray-700 placeholder:text-gray-300"
+                      className="flex-1 bg-transparent outline-none text-sm text-foreground placeholder:text-ink/20"
                     />
                   </div>
                 ) : (
                   <button
                     onClick={() => setIsAddingRow(true)}
-                    className="flex items-center gap-1 text-gray-400 hover:text-gray-600 text-sm transition-colors"
+                    className="flex items-center gap-1 text-muted hover:text-muted-foreground text-sm transition-colors"
                   >
                     <Plus size={14} />
                     New row
@@ -471,11 +471,11 @@ export function DatabaseTable({ block, editor }: DatabaseTableProps) {
         {/* Row right-click context menu */}
         {rowContextMenu && (
           <div
-            className="fixed bg-white rounded-lg border border-gray-200 shadow-lg py-1 min-w-[140px]"
+            className="fixed bg-surface rounded-lg border border-border shadow-lg py-1 min-w-[140px]"
             style={{ top: rowContextMenu.y, left: rowContextMenu.x, zIndex: 9999 }}
           >
             <button
-              className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-red-50 text-sm text-red-600"
+              className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-red-50 dark:hover:bg-red-500/10 text-sm text-red-600 dark:text-red-400"
               onClick={() => {
                 deleteRow(rowContextMenu.rowId);
                 setRowContextMenu(null);

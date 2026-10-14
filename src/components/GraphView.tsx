@@ -209,7 +209,7 @@ export function GraphView() {
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 max-w-md w-[calc(100%-2rem)] rounded-md border border-border bg-background/95 px-3 py-2.5 text-[12px] text-muted-foreground shadow-sm">
           <p className="leading-snug">
             No links found. Notes connect when they mention each other with{" "}
-            <code className="text-[11px] bg-black/[0.06] px-1 rounded">[[wikilinks]]</code> or page mentions.
+            <code className="text-[11px] bg-ink/[0.06] px-1 rounded">[[wikilinks]]</code> or page mentions.
             Older notes may need a rebuild.
           </p>
           <div className="mt-2 flex items-center gap-2">
@@ -217,11 +217,11 @@ export function GraphView() {
               type="button"
               onClick={onRebuild}
               disabled={rebuilding}
-              className="px-2 py-1 rounded-md bg-black/[0.08] hover:bg-black/[0.12] text-foreground text-[11px] font-medium disabled:opacity-50"
+              className="px-2 py-1 rounded-md bg-ink/[0.08] hover:bg-ink/[0.12] text-foreground text-[11px] font-medium disabled:opacity-50"
             >
               {rebuilding ? "Rebuilding…" : "Rebuild links"}
             </button>
-            {rebuildError && <span className="text-[11px] text-red-500">{rebuildError}</span>}
+            {rebuildError && <span className="text-[11px] text-red-500 dark:text-red-400">{rebuildError}</span>}
           </div>
         </div>
       )}

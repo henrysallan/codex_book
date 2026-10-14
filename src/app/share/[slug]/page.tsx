@@ -75,10 +75,10 @@ export default async function SharePage({ params }: Props) {
 
   if (!data) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center space-y-3 px-6">
-          <h1 className="text-2xl font-semibold text-gray-900">Note not found</h1>
-          <p className="text-gray-500 text-sm max-w-sm">
+          <h1 className="text-2xl font-semibold text-foreground">Note not found</h1>
+          <p className="text-muted-foreground text-sm max-w-sm">
             This note doesn&apos;t exist or is no longer shared.
           </p>
         </div>

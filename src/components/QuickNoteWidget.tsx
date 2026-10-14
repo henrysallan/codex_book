@@ -60,12 +60,12 @@ export function QuickNoteWidget() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Jot something down…"
-            className="flex-1 text-xs px-3 py-1.5 rounded-lg border border-border bg-white focus:outline-none focus:ring-1 focus:ring-black/10 placeholder:text-muted-foreground/60"
+            className="flex-1 text-xs px-3 py-1.5 rounded-lg border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ink/10 placeholder:text-muted-foreground/60"
           />
           <button
             type="submit"
             disabled={!input.trim()}
-            className="shrink-0 p-1.5 rounded-lg border border-border hover:bg-black/5 disabled:opacity-30 disabled:cursor-default transition-colors"
+            className="shrink-0 p-1.5 rounded-lg border border-border hover:bg-ink/5 disabled:opacity-30 disabled:cursor-default transition-colors"
           >
             <Plus size={14} />
           </button>

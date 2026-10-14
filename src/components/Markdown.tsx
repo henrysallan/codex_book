@@ -72,7 +72,7 @@ function buildComponents(
         return <code className="text-[12px] font-mono">{children}</code>;
       }
       return (
-        <code className="px-1 py-0.5 rounded bg-black/[0.06] text-[0.9em] font-mono">
+        <code className="px-1 py-0.5 rounded bg-ink/[0.06] text-[0.9em] font-mono">
           {children}
         </code>
       );
@@ -80,7 +80,7 @@ function buildComponents(
 
     // Code blocks
     pre: ({ children }) => (
-      <pre className="bg-black/[0.04] rounded-md px-3 py-2 mb-2 overflow-x-auto text-[12px] font-mono leading-relaxed">
+      <pre className="bg-ink/[0.04] rounded-md px-3 py-2 mb-2 overflow-x-auto text-[12px] font-mono leading-relaxed">
         {children}
       </pre>
     ),
@@ -105,7 +105,7 @@ function buildComponents(
                 onCiteClick(source.docId);
               }}
               title={source.title}
-              className="inline-flex items-center justify-center min-w-[1.1em] h-[1.1em] px-[3px] text-[9px] font-semibold leading-none rounded bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors cursor-pointer align-super ml-[1px] -mr-[1px]"
+              className="inline-flex items-center justify-center min-w-[1.1em] h-[1.1em] px-[3px] text-[9px] font-semibold leading-none rounded bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-500/20 dark:text-blue-300 dark:hover:bg-blue-500/30 transition-colors cursor-pointer align-super ml-[1px] -mr-[1px]"
             >
               {num}
             </button>
@@ -124,7 +124,7 @@ function buildComponents(
               e.preventDefault();
               onCiteClick(href);
             }}
-            className="text-blue-600 hover:underline cursor-pointer"
+            className="text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
           >
             {children}
           </button>
@@ -136,7 +136,7 @@ function buildComponents(
         return (
           <a
             href={href}
-            className="text-blue-600 hover:underline"
+            className="text-blue-600 dark:text-blue-400 hover:underline"
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -147,12 +147,12 @@ function buildComponents(
 
       // Non-external, non-UUID link — render as inert text to avoid
       // navigating away from the app
-      return <span className="text-blue-600">{children}</span>;
+      return <span className="text-blue-600 dark:text-blue-400">{children}</span>;
     },
 
     // Blockquotes
     blockquote: ({ children }) => (
-      <blockquote className="border-l-2 border-black/15 pl-3 my-2 text-muted-foreground italic">
+      <blockquote className="border-l-2 border-ink/15 pl-3 my-2 text-muted-foreground italic">
         {children}
       </blockquote>
     ),

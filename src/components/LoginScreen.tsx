@@ -7,19 +7,19 @@ export function LoginScreen() {
 
   if (isLoading) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-white">
+      <div className="h-screen w-screen flex items-center justify-center bg-background">
         <p className="text-sm text-muted-foreground">Loading&hellip;</p>
       </div>
     );
   }
 
   return (
-    <div className="h-screen w-screen flex items-center justify-center bg-white">
+    <div className="h-screen w-screen flex items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-6 max-w-sm w-full px-6">
         {/* Logo */}
         <div className="flex flex-col items-center gap-2">
-          <div className="w-10 h-10 rounded-lg bg-black flex items-center justify-center">
-            <span className="text-white font-semibold text-lg">C</span>
+          <div className="w-10 h-10 rounded-lg bg-foreground flex items-center justify-center">
+            <span className="text-background font-semibold text-lg">C</span>
           </div>
           <h1 className="text-xl font-semibold text-foreground">Cortex</h1>
           <p className="text-sm text-muted-foreground text-center">
@@ -30,7 +30,7 @@ export function LoginScreen() {
         {/* Google Sign-In Button */}
         <button
           onClick={signInWithGoogle}
-          className="w-full flex items-center justify-center gap-3 px-4 py-2.5 rounded-lg border border-border bg-white hover:bg-gray-50 transition-colors text-sm font-medium text-foreground shadow-sm"
+          className="w-full flex items-center justify-center gap-3 px-4 py-2.5 rounded-lg border border-border bg-background hover:bg-ink/2 transition-colors text-sm font-medium text-foreground shadow-sm"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
             <path

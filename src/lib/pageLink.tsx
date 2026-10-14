@@ -13,8 +13,8 @@ export function PageLinkView(props: {
   return (
     <span
       style={{
-        backgroundColor: "rgba(35, 131, 226, 0.14)",
-        color: "rgb(35, 131, 226)",
+        backgroundColor: "var(--page-link-bg)",
+        color: "var(--page-link-fg)",
         padding: "1px 6px",
         borderRadius: "3px",
         cursor: "pointer",

@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Class-based dark mode. `dark` is put on <html> before first paint by the
+   inline script in layout.tsx and kept in sync by src/lib/theme.ts. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ─── Theme tokens ───
+   Components reach these through Tailwind (bg-background, bg-surface,
+   text-muted-foreground, bg-ink/5 …), so one class name serves both themes.
+   Keep the first six as hex: the graph renderer reads them and only knows how
+   to alpha-blend hex (src/lib/graph/renderer.ts). */
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -8,6 +17,34 @@
   --accent: #000000;
   --muted: #a3a3a3;
   --muted-foreground: #737373;
+  /* Raised layers: menus, popovers, dialogs, dropdowns. */
+  --surface: #ffffff;
+  /* Base of translucent tints (hover, selected, fills, focus rings):
+     bg-ink/5 is black at 5% in light, white at 5% in dark. Use bg-black/x
+     only for modal scrims, which stay dark in both themes. */
+  --ink: #000000;
+
+  --scrollbar-thumb: #d4d4d4;
+  --scrollbar-thumb-hover: #a3a3a3;
+
+  color-scheme: light;
+}
+
+:root.dark {
+  --background: #111111;
+  --foreground: #ededed;
+  --sidebar-bg: #171717;
+  --border: #2b2b2b;
+  --accent: #fafafa;
+  --muted: #666666;
+  --muted-foreground: #a1a1a1;
+  --surface: #1b1b1b;
+  --ink: #ffffff;
+
+  --scrollbar-thumb: #3a3a3a;
+  --scrollbar-thumb-hover: #555555;
+
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -18,6 +55,8 @@
   --color-accent: var(--accent);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
   --font-sans: var(--font-inter);
 }
 
@@ -48,6 +87,97 @@ body {
   font-size: var(--note-font-size, 16px) !important;
 }
 
+/* ─── BlockNote dark theme ───
+   BlockNoteView gets theme="dark" (which also flips Mantine's own scheme),
+   but its stock dark palette sits on #1f1f1f and uses saturated highlight
+   colours. Re-point it at our tokens. Keyed on html.dark rather than the
+   container's data-color-scheme so the editor is right from the first paint,
+   and `:root.dark` outranks BlockNote's own `.bn-container[data-color-scheme]`
+   rules, which may load after this file. Light mode keeps BlockNote's
+   defaults. */
+:root.dark .bn-container {
+  --bn-colors-editor-text: #d4d4d4;
+  --bn-colors-editor-background: var(--background);
+  --bn-colors-menu-text: #d4d4d4;
+  --bn-colors-menu-background: var(--surface);
+  --bn-colors-tooltip-text: #d4d4d4;
+  --bn-colors-tooltip-background: #262626;
+  --bn-colors-hovered-text: #ededed;
+  --bn-colors-hovered-background: #2a2a2a;
+  --bn-colors-selected-text: #ededed;
+  --bn-colors-selected-background: #3a3a3a;
+  --bn-colors-disabled-text: #5c5c5c;
+  --bn-colors-disabled-background: #222222;
+  --bn-colors-shadow: rgba(0, 0, 0, 0.6);
+  --bn-colors-border: var(--border);
+  --bn-colors-side-menu: #5a5a5a;
+
+  --bn-colors-highlights-gray-text: #9b9b9b;
+  --bn-colors-highlights-gray-background: #2f2f2f;
+  --bn-colors-highlights-brown-text: #ba856f;
+  --bn-colors-highlights-brown-background: #4a3228;
+  --bn-colors-highlights-red-text: #df5452;
+  --bn-colors-highlights-red-background: #522e2a;
+  --bn-colors-highlights-orange-text: #c77d48;
+  --bn-colors-highlights-orange-background: #5c3b23;
+  --bn-colors-highlights-yellow-text: #ca9849;
+  --bn-colors-highlights-yellow-background: #564328;
+  --bn-colors-highlights-green-text: #529e72;
+  --bn-colors-highlights-green-background: #243d30;
+  --bn-colors-highlights-blue-text: #5e87c9;
+  --bn-colors-highlights-blue-background: #143a4e;
+  --bn-colors-highlights-purple-text: #9d68d3;
+  --bn-colors-highlights-purple-background: #3c2d49;
+  --bn-colors-highlights-pink-text: #d15796;
+  --bn-colors-highlights-pink-background: #4e2c3c;
+}
+
+/* BlockNote core also colours the whole block wrapper of a coloured block
+   with hard-coded light values (only the content element uses the variables),
+   which shows as a pale band around nested children in dark mode. */
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-text-color="gray"]) { color: var(--bn-colors-highlights-gray-text); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-text-color="brown"]) { color: var(--bn-colors-highlights-brown-text); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-text-color="red"]) { color: var(--bn-colors-highlights-red-text); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-text-color="orange"]) { color: var(--bn-colors-highlights-orange-text); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-text-color="yellow"]) { color: var(--bn-colors-highlights-yellow-text); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-text-color="green"]) { color: var(--bn-colors-highlights-green-text); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-text-color="blue"]) { color: var(--bn-colors-highlights-blue-text); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-text-color="purple"]) { color: var(--bn-colors-highlights-purple-text); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-text-color="pink"]) { color: var(--bn-colors-highlights-pink-text); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-background-color="gray"]) { background-color: var(--bn-colors-highlights-gray-background); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-background-color="brown"]) { background-color: var(--bn-colors-highlights-brown-background); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-background-color="red"]) { background-color: var(--bn-colors-highlights-red-background); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-background-color="orange"]) { background-color: var(--bn-colors-highlights-orange-background); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-background-color="yellow"]) { background-color: var(--bn-colors-highlights-yellow-background); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-background-color="green"]) { background-color: var(--bn-colors-highlights-green-background); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-background-color="blue"]) { background-color: var(--bn-colors-highlights-blue-background); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-background-color="purple"]) { background-color: var(--bn-colors-highlights-purple-background); }
+:root.dark .bn-container .bn-block:has(> .bn-block-content[data-background-color="pink"]) { background-color: var(--bn-colors-highlights-pink-background); }
+
+/* Code blocks are near-black in both themes; lift and outline them so they
+   don't disappear into the dark page. */
+:root.dark .bn-block-content[data-content-type="codeBlock"] {
+  background-color: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* Empty file/image block placeholder */
+:root.dark [data-file-block] .bn-add-file-button {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: var(--muted-foreground);
+}
+:root.dark .bn-editor[contenteditable="true"] [data-file-block] .bn-add-file-button:hover,
+:root.dark [data-file-block] .bn-file-name-with-icon:hover,
+:root.dark .ProseMirror-selectednode .bn-file-name-with-icon {
+  background-color: rgba(255, 255, 255, 0.09);
+}
+
+/* Built-in table block */
+:root.dark .bn-editor [data-content-type="table"] th,
+:root.dark .bn-editor [data-content-type="table"] td {
+  border-color: var(--border);
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
@@ -59,19 +189,33 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #d4d4d4;
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #a3a3a3;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* ─── Database table block ─── */
+:root {
+  --db-border: #e0e0e0;
+  --db-text: #424242;
+  --db-header-text: #9e9e9e;
+  --db-hover: #f5f5f5;
+  --db-chip: #f0f0f0;
+}
+:root.dark {
+  --db-border: #2e2e2e;
+  --db-text: #d4d4d4;
+  --db-header-text: #8a8a8a;
+  --db-hover: rgba(255, 255, 255, 0.05);
+  --db-chip: #2a2a2a;
+}
 .db-table {
   border-spacing: 0;
-  border-top: 1px solid #e0e0e0;
-  border-bottom: 1px solid #e0e0e0;
+  border-top: 1px solid var(--db-border);
+  border-bottom: 1px solid var(--db-border);
   min-width: 100%;
   width: max-content;
   overflow: visible;
@@ -85,14 +229,14 @@ body {
 }
 .db-th,
 .db-td {
-  border-bottom: 1px solid #e0e0e0;
-  border-right: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--db-border);
+  border-right: 1px solid var(--db-border);
   padding: 0.5rem;
   position: relative;
   text-align: left;
   vertical-align: middle;
   white-space: nowrap;
-  color: #424242;
+  color: var(--db-text);
   margin: 0;
 }
 .db-th:last-child,
@@ -100,14 +244,14 @@ body {
   border-right: 0;
 }
 .db-th {
-  color: #9e9e9e;
+  color: var(--db-header-text);
   font-weight: normal;
   font-size: 0.8125rem;
   cursor: pointer;
   user-select: none;
 }
 .db-th:hover {
-  background-color: #f5f5f5;
+  background-color: var(--db-hover);
 }
 .db-add-col {
   width: 36px;
@@ -115,7 +259,7 @@ body {
   padding: 4px;
 }
 .db-add-col:hover {
-  background-color: #f5f5f5;
+  background-color: var(--db-hover);
 }
 .db-resizer {
   display: inline-block;
@@ -142,22 +286,42 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: white;
+  background: var(--surface);
   width: 22px;
   height: 22px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--db-border);
   border-radius: 3px;
   cursor: grab;
   touch-action: none;
   flex-shrink: 0;
-  color: #9e9e9e;
+  color: var(--db-header-text);
 }
 .db-th:hover .db-drag-handle {
   opacity: 1;
 }
 .db-drag-handle:hover {
   opacity: 1;
-  background: #f5f5f5;
+  background: var(--db-hover);
+}
+
+/* Select-cell pills: CellEditor sets --pill-hue from the option text. */
+.db-pill {
+  background-color: hsl(var(--pill-hue) 60% 92%);
+  color: hsl(var(--pill-hue) 60% 30%);
+}
+:root.dark .db-pill {
+  background-color: hsl(var(--pill-hue) 30% 22%);
+  color: hsl(var(--pill-hue) 65% 80%);
+}
+
+/* ─── Page link pill (pageLink inline content, editor + share page) ─── */
+:root {
+  --page-link-bg: rgba(35, 131, 226, 0.14);
+  --page-link-fg: rgb(35, 131, 226);
+}
+:root.dark {
+  --page-link-bg: rgba(35, 131, 226, 0.22);
+  --page-link-fg: rgb(111, 177, 242);
 }
 
 /* ─── Globally suppress database block selection outline ─── */

@@ -71,7 +71,7 @@ function TextCell({
           setEditing(true);
         }}
       >
-        {value || <span className="text-gray-300">Empty</span>}
+        {value || <span className="text-ink/20">Empty</span>}
       </span>
     );
   }
@@ -131,7 +131,7 @@ function NumberCell({
           setEditing(true);
         }}
       >
-        {value != null ? value : <span className="text-gray-300">Empty</span>}
+        {value != null ? value : <span className="text-ink/20">Empty</span>}
       </span>
     );
   }
@@ -183,47 +183,41 @@ function SelectCell({
 
   const hue = (str: string) =>
     [...str].reduce((h, c) => c.charCodeAt(0) + ((h << 5) - h), 0) % 360;
+  // Lightness per theme lives in the .db-pill rule in globals.css.
+  const pillStyle = (str: string) => ({ "--pill-hue": hue(str) }) as React.CSSProperties;
 
   return (
     <div ref={ref} className="relative" onMouseDown={(e) => e.stopPropagation()}>
       <span
-        className="inline-block px-2 py-0.5 rounded-full text-xs font-medium cursor-pointer"
-        style={
-          value
-            ? {
-                backgroundColor: `hsl(${hue(value)}, 60%, 92%)`,
-                color: `hsl(${hue(value)}, 60%, 30%)`,
-              }
-            : { color: "#d1d5db" }
-        }
+        className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium cursor-pointer ${
+          value ? "db-pill" : "text-ink/20"
+        }`}
+        style={value ? pillStyle(value) : undefined}
         onClick={() => setOpen(!open)}
       >
         {value || "—"}
       </span>
       {open && (
-        <div className="absolute z-50 mt-1 bg-white shadow-lg rounded-lg border py-1 min-w-[120px]">
+        <div className="absolute z-50 mt-1 bg-surface shadow-lg rounded-lg border border-border py-1 min-w-[120px]">
           {options.map((opt) => (
             <button
               key={opt}
-              className="block w-full text-left px-3 py-1 hover:bg-gray-100 text-sm"
+              className="block w-full text-left px-3 py-1 hover:bg-ink/5 text-sm"
               onClick={() => {
                 onChange(opt);
                 setOpen(false);
               }}
             >
               <span
-                className="inline-block px-2 py-0.5 rounded-full text-xs font-medium"
-                style={{
-                  backgroundColor: `hsl(${hue(opt)}, 60%, 92%)`,
-                  color: `hsl(${hue(opt)}, 60%, 30%)`,
-                }}
+                className="db-pill inline-block px-2 py-0.5 rounded-full text-xs font-medium"
+                style={pillStyle(opt)}
               >
                 {opt}
               </span>
             </button>
           ))}
           {options.length === 0 && (
-            <span className="block px-3 py-1 text-xs text-gray-400">
+            <span className="block px-3 py-1 text-xs text-muted">
               No options yet
             </span>
           )}
@@ -308,7 +302,7 @@ function TitleCell({
             onOpenDoc(docId);
           }}
           onMouseDown={(e) => e.stopPropagation()}
-          className="text-blue-600 hover:text-blue-800 hover:underline truncate text-left"
+          className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:underline truncate text-left"
           title="Open note"
         >
           {value || "Untitled"}
@@ -320,7 +314,7 @@ function TitleCell({
             setEditing(true);
           }}
           onMouseDown={(e) => e.stopPropagation()}
-          className="opacity-0 group-hover:opacity-60 hover:!opacity-100 text-gray-400 flex-shrink-0 transition-opacity"
+          className="opacity-0 group-hover:opacity-60 hover:!opacity-100 text-muted flex-shrink-0 transition-opacity"
           title="Rename"
         >
           ✎

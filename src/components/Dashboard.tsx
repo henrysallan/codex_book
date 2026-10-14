@@ -36,16 +36,16 @@ export function Dashboard() {
       <div className="flex-1 min-h-0 flex gap-2 pt-2 pr-2 pb-2">
         {/* Left — Quick Notes + Todo stacked */}
         <div className="w-72 shrink-0 flex flex-col gap-2">
-          <div className="rounded-md border border-border bg-white overflow-hidden flex flex-col max-h-[50%]">
+          <div className="rounded-md border border-border bg-background overflow-hidden flex flex-col max-h-[50%]">
             <QuickNoteWidget />
           </div>
-          <div className="flex-1 min-h-0 rounded-md border border-border bg-white overflow-hidden flex flex-col">
+          <div className="flex-1 min-h-0 rounded-md border border-border bg-background overflow-hidden flex flex-col">
             <TodoWidget />
           </div>
         </div>
 
         {/* Center — Daily Document */}
-        <div className="flex-1 min-w-0 rounded-md bg-white overflow-hidden flex flex-col">
+        <div className="flex-1 min-w-0 rounded-md bg-background overflow-hidden flex flex-col">
           <DailyDocumentPreview />
         </div>
       </div>

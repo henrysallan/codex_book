@@ -44,7 +44,7 @@ export function PdfSelectionMenu({
       <div className="fixed inset-0 z-[60]" onClick={onDismiss} />
 
       <div
-        className="fixed z-[61] bg-white rounded-lg shadow-lg border border-border p-1.5 flex items-center gap-1"
+        className="fixed z-[61] bg-surface rounded-lg shadow-lg border border-border p-1.5 flex items-center gap-1"
         style={{
           left: position.x,
           top: position.y,
@@ -59,7 +59,7 @@ export function PdfSelectionMenu({
               onClick={() => setSelectedColor(c.value)}
               className={`w-4 h-4 rounded-full ${c.bg} transition-all ${
                 selectedColor === c.value
-                  ? `ring-2 ${c.ring} ring-offset-1 scale-110`
+                  ? `ring-2 ${c.ring} ring-offset-1 ring-offset-surface scale-110`
                   : "hover:scale-110"
               }`}
               title={c.value}
@@ -70,21 +70,21 @@ export function PdfSelectionMenu({
         {/* Action buttons */}
         <button
           onClick={() => onAction("highlight", selectedColor)}
-          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded hover:bg-black/5 text-foreground transition-colors"
+          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded hover:bg-ink/5 text-foreground transition-colors"
           title="Highlight"
         >
           <Highlighter size={13} />
         </button>
         <button
           onClick={() => onAction("note", selectedColor)}
-          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded hover:bg-black/5 text-foreground transition-colors"
+          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded hover:bg-ink/5 text-foreground transition-colors"
           title="Add note"
         >
           <StickyNote size={13} />
         </button>
         <button
           onClick={() => onAction("chat", selectedColor)}
-          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded hover:bg-black/5 text-foreground transition-colors"
+          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded hover:bg-ink/5 text-foreground transition-colors"
           title="Start chat"
         >
           <MessageSquare size={13} />

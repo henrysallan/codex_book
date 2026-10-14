@@ -5,6 +5,7 @@ import { Tldraw, Editor, TLEditorSnapshot } from "tldraw";
 import "tldraw/tldraw.css";
 import { Document } from "@/lib/types";
 import { fetchMoodboardState, saveMoodboardState } from "@/lib/db";
+import { useResolvedTheme } from "@/lib/theme";
 
 interface MoodboardCanvasProps {
   document: Document;
@@ -20,6 +21,14 @@ export function MoodboardCanvas({ document: doc }: MoodboardCanvasProps) {
   const [syncStatus, setSyncStatus] = useState<"synced" | "pending" | "saving" | "error">("synced");
   const syncStatusRef = useRef(syncStatus);
   syncStatusRef.current = syncStatus;
+
+  // tldraw keeps its own colour-scheme preference; drive it from the app theme.
+  const theme = useResolvedTheme();
+  const themeRef = useRef(theme);
+  useEffect(() => {
+    themeRef.current = theme;
+    editorRef.current?.user.updateUserPreferences({ colorScheme: theme });
+  }, [theme]);
 
   // Load saved snapshot on mount
   useEffect(() => {
@@ -151,6 +160,7 @@ export function MoodboardCanvas({ document: doc }: MoodboardCanvasProps) {
   const handleMount = useCallback(
     (editor: Editor) => {
       editorRef.current = editor;
+      editor.user.updateUserPreferences({ colorScheme: themeRef.current });
 
       // Load the saved snapshot into the editor.
       // We only persist { document } (no session/camera) to keep the payload small.

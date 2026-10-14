@@ -78,7 +78,7 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="absolute right-0 top-0 opacity-0 group-hover/assistant:opacity-100 transition-opacity p-1 rounded hover:bg-black/[0.06] text-muted-foreground hover:text-foreground"
+      className="absolute right-0 top-0 opacity-0 group-hover/assistant:opacity-100 transition-opacity p-1 rounded hover:bg-ink/[0.06] text-muted-foreground hover:text-foreground"
       title="Copy to clipboard"
     >
       {copied ? <Check size={12} /> : <Copy size={12} />}
@@ -373,7 +373,7 @@ export function ChatPanel() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="h-full flex flex-col bg-background">
       {/* Chat messages */}
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
         {chatMessages.length === 0 && !isStreaming && (
@@ -443,7 +443,7 @@ export function ChatPanel() {
         {!isStreaming && lastMeta?.tier === "TIER1" && chatMessages.length > 0 && (
           <button
             onClick={handleLookDeeper}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-black/[0.03] transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-ink/[0.03] transition-colors"
           >
             <Search size={12} />
             Look deeper →
@@ -460,7 +460,7 @@ export function ChatPanel() {
                   <button
                     key={docId}
                     onClick={() => openDocument(docId)}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] text-muted-foreground hover:text-foreground border border-border rounded-md hover:bg-black/[0.03] transition-colors"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] text-muted-foreground hover:text-foreground border border-border rounded-md hover:bg-ink/[0.03] transition-colors"
                     title={`Open "${getDocTitle(docId)}"`}
                   >
                     <FileText size={10} />
@@ -476,7 +476,7 @@ export function ChatPanel() {
                 contextItems.length === 0 && (
                   <button
                     onClick={handleContinueWithContext}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-black/[0.03] transition-colors"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-ink/[0.03] transition-colors"
                   >
                     <Plus size={12} />
                     Continue with these docs as context
@@ -502,7 +502,7 @@ export function ChatPanel() {
                     ? `folder-${item.folderId}`
                     : `blk-${item.blockId}`
                 }
-                className="inline-flex items-center gap-1 pl-1.5 pr-1 py-0.5 rounded-md border border-border bg-black/[0.03] text-[11px] text-foreground max-w-[180px] group"
+                className="inline-flex items-center gap-1 pl-1.5 pr-1 py-0.5 rounded-md border border-border bg-ink/[0.03] text-[11px] text-foreground max-w-[180px] group"
               >
                 {item.type === "document" ? (
                   <FileText size={11} className="shrink-0 text-muted-foreground" />
@@ -520,7 +520,7 @@ export function ChatPanel() {
                 </span>
                 <button
                   onClick={() => removeContextItem(item)}
-                  className="shrink-0 p-0.5 rounded hover:bg-black/10 text-muted-foreground hover:text-foreground transition-colors"
+                  className="shrink-0 p-0.5 rounded hover:bg-ink/10 text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <X size={10} />
                 </button>
@@ -555,7 +555,7 @@ export function ChatPanel() {
             placeholder={isStreaming ? "Waiting for response…" : researchMode ? "Ask anything…" : "Ask about your notes…"}
             rows={2}
             disabled={isStreaming}
-            className="w-full text-sm bg-transparent border-none outline-none resize-none placeholder:text-black/16 disabled:opacity-50"
+            className="w-full text-sm bg-transparent border-none outline-none resize-none placeholder:text-ink/16 disabled:opacity-50"
           />
           <div className="flex items-center justify-between mt-1">
             {/* Model selector */}
@@ -568,7 +568,7 @@ export function ChatPanel() {
                 <ChevronDown size={12} />
               </button>
               {showModelPicker && (
-                <div className="absolute bottom-full left-0 mb-1 bg-white border border-border rounded shadow-lg py-1 z-10">
+                <div className="absolute bottom-full left-0 mb-1 bg-surface border border-border rounded shadow-lg py-1 z-10">
                   {models.map((m) => (
                     <button
                       key={m}
@@ -576,7 +576,7 @@ export function ChatPanel() {
                         setModel(m);
                         setShowModelPicker(false);
                       }}
-                      className={`block w-full text-left px-3 py-1 text-xs hover:bg-black/5 ${
+                      className={`block w-full text-left px-3 py-1 text-xs hover:bg-ink/5 ${
                         m === model ? "font-medium" : ""
                       }`}
                     >
@@ -593,8 +593,8 @@ export function ChatPanel() {
                 onClick={() => setResearchMode(!researchMode)}
                 className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] transition-colors ${
                   researchMode
-                    ? "bg-blue-50 text-blue-600 border border-blue-200"
-                    : "text-muted-foreground hover:text-foreground hover:bg-black/[0.04]"
+                    ? "bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-500/15 dark:text-blue-300 dark:border-blue-500/30"
+                    : "text-muted-foreground hover:text-foreground hover:bg-ink/[0.04]"
                 }`}
                 title={researchMode ? "Research mode: general knowledge + web search. Pinned notes are still included." : "Notes mode: searching your knowledge base. Web search is also available."}
               >

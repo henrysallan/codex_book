@@ -122,7 +122,7 @@ export function AnnotationChat() {
   };
 
   return (
-    <div className="w-[280px] bg-white rounded-xl border border-border shadow-lg flex flex-col max-h-[400px]">
+    <div className="w-[280px] bg-surface rounded-xl border border-border shadow-lg flex flex-col max-h-[400px]">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border rounded-t-xl">
         <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
@@ -132,14 +132,14 @@ export function AnnotationChat() {
         <div className="flex items-center gap-1">
           <button
             onClick={() => deleteAnnotationById(activeAnnotation.id)}
-            className="p-0.5 rounded hover:bg-red-50 text-muted-foreground hover:text-red-500 transition-colors"
+            className="p-0.5 rounded hover:bg-red-50 dark:hover:bg-red-500/10 text-muted-foreground hover:text-red-500 dark:hover:text-red-400 transition-colors"
             title="Delete annotation"
           >
             <Trash2 size={12} />
           </button>
           <button
             onClick={handleClose}
-            className="p-0.5 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+            className="p-0.5 rounded hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors"
           >
             <X size={14} />
           </button>
@@ -147,7 +147,7 @@ export function AnnotationChat() {
       </div>
 
       {/* Highlighted text context */}
-      <div className="px-3 py-2 border-b border-border bg-yellow-50/60">
+      <div className="px-3 py-2 border-b border-border bg-yellow-50/60 dark:bg-yellow-500/10">
         <p className="text-[11px] text-foreground leading-relaxed line-clamp-3">
           &ldquo;{activeAnnotation.highlightedText}&rdquo;
         </p>
@@ -216,7 +216,7 @@ export function AnnotationChat() {
           placeholder={isStreaming ? "Waiting for response…" : "Type to chat...."}
           rows={2}
           disabled={isStreaming}
-          className="w-full text-xs bg-transparent border border-border rounded-lg p-2 outline-none resize-none placeholder:text-black/20 disabled:opacity-50"
+          className="w-full text-xs bg-transparent border border-border rounded-lg p-2 outline-none resize-none placeholder:text-ink/20 disabled:opacity-50"
         />
       </div>
     </div>

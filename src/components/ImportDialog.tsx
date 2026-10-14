@@ -172,12 +172,12 @@ export function ImportDialog({ isOpen, onClose }: ImportDialogProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 dark:bg-black/60"
       onClick={(e) => {
         if (e.target === e.currentTarget && !importing) handleClose();
       }}
     >
-      <div className="bg-white rounded-xl shadow-xl w-[540px] max-h-[720px] overflow-hidden flex flex-col">
+      <div className="bg-surface rounded-xl shadow-xl w-[540px] max-h-[720px] overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
           <h2 className="text-base font-semibold text-foreground">
             Import Markdown
@@ -234,7 +234,7 @@ export function ImportDialog({ isOpen, onClose }: ImportDialogProps) {
               </p>
 
               <div
-                className="border-2 border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition-colors"
+                className="border-2 border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 dark:hover:bg-blue-500/10 transition-colors"
                 onClick={() => folderInputRef.current?.click()}
               >
                 <FolderOpen
@@ -321,7 +321,7 @@ export function ImportDialog({ isOpen, onClose }: ImportDialogProps) {
               </div>
               {progress && progress.total > 0 && (
                 <div className="space-y-1">
-                  <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="w-full h-2 bg-ink/5 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-blue-500 rounded-full transition-all duration-200"
                       style={{ width: `${progressPct}%` }}
@@ -340,7 +340,7 @@ export function ImportDialog({ isOpen, onClose }: ImportDialogProps) {
           {report && report.unresolved.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5 text-xs text-amber-600">
+                <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
                   <AlertTriangle size={12} />
                   <span>
                     {report.unresolved.length} unresolved link
@@ -358,7 +358,7 @@ export function ImportDialog({ isOpen, onClose }: ImportDialogProps) {
                   {copied ? "Copied" : "Copy targets"}
                 </button>
               </div>
-              <div className="max-h-[160px] overflow-y-auto text-xs bg-gray-50 rounded p-2 space-y-2">
+              <div className="max-h-[160px] overflow-y-auto text-xs bg-ink/2 rounded p-2 space-y-2">
                 {groupUnresolved(report.unresolved).map((group) => (
                   <div key={group.target}>
                     <p className="font-medium text-foreground">
@@ -388,11 +388,11 @@ export function ImportDialog({ isOpen, onClose }: ImportDialogProps) {
 
           {report && report.duplicateTitles.length > 0 && (
             <div className="space-y-1">
-              <p className="text-xs text-amber-600">
+              <p className="text-xs text-amber-600 dark:text-amber-400">
                 {report.duplicateTitles.length} duplicate title
                 {report.duplicateTitles.length !== 1 ? "s" : ""} (first wins)
               </p>
-              <div className="max-h-[80px] overflow-y-auto text-xs text-muted-foreground bg-gray-50 rounded p-2 space-y-0.5">
+              <div className="max-h-[80px] overflow-y-auto text-xs text-muted-foreground bg-ink/2 rounded p-2 space-y-0.5">
                 {report.duplicateTitles.map((d, i) => (
                   <p key={i} className="truncate">
                     {d.title}: {d.paths.join(", ")}
@@ -407,14 +407,14 @@ export function ImportDialog({ isOpen, onClose }: ImportDialogProps) {
           <button
             onClick={handleClose}
             disabled={importing}
-            className="px-4 py-2 text-sm text-foreground hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm text-foreground hover:bg-ink/5 rounded-lg transition-colors disabled:opacity-50"
           >
             {report ? "Done" : "Cancel"}
           </button>
           {report && (
             <button
               onClick={reset}
-              className="px-4 py-2 text-sm text-foreground hover:bg-gray-100 rounded-lg transition-colors"
+              className="px-4 py-2 text-sm text-foreground hover:bg-ink/5 rounded-lg transition-colors"
             >
               Import another
             </button>
@@ -461,7 +461,7 @@ function DialectButton({
       disabled={disabled}
       className={`text-left rounded-lg border p-3 transition-colors ${
         selected
-          ? "border-blue-500 bg-blue-50/60"
+          ? "border-blue-500 bg-blue-50/60 dark:bg-blue-500/10"
           : "border-border hover:border-blue-300"
       } disabled:opacity-50`}
     >
@@ -488,8 +488,8 @@ function ReportView({
       <div
         className={`flex items-center gap-2 text-sm p-3 rounded-lg ${
           hasIssues
-            ? "bg-yellow-50 text-yellow-700"
-            : "bg-green-50 text-green-700"
+            ? "bg-yellow-50 text-yellow-700 dark:bg-yellow-500/10 dark:text-yellow-300"
+            : "bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-300"
         }`}
       >
         <Check size={16} />
@@ -526,7 +526,7 @@ function ReportView({
         </div>
         {report.stubsCreated > 0 && (
           <div className="flex items-center gap-2 text-foreground col-span-2">
-            <FileText size={14} className="text-gray-500" />
+            <FileText size={14} className="text-muted-foreground" />
             <span>
               {report.stubsCreated} stub
               {report.stubsCreated !== 1 ? "s" : ""} created
@@ -537,14 +537,14 @@ function ReportView({
 
       {report.errors.length > 0 && (
         <div className="space-y-1">
-          <div className="flex items-center gap-1.5 text-xs text-amber-600">
+          <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
             <AlertTriangle size={12} />
             <span>
               {report.errors.length} warning
               {report.errors.length !== 1 ? "s" : ""}
             </span>
           </div>
-          <div className="max-h-[100px] overflow-y-auto text-xs text-muted-foreground bg-gray-50 rounded p-2 space-y-0.5">
+          <div className="max-h-[100px] overflow-y-auto text-xs text-muted-foreground bg-ink/2 rounded p-2 space-y-0.5">
             {report.errors.map((err, i) => (
               <p key={i} className="truncate">
                 {err}

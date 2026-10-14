@@ -715,7 +715,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
           <div className="flex flex-col h-full items-center py-3">
             <button
               onClick={toggleCollapsed}
-              className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+              className="p-1 rounded hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors"
               title="Expand sidebar"
             >
               <ChevronRight size={16} />
@@ -774,11 +774,11 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
           <>
         {/* Logo */}
         <div className="px-2 pt-2 pb-1">
-          <div className="flex items-center justify-between gap-2 rounded-md bg-black/[0.06] px-2.5 py-1.5">
+          <div className="flex items-center justify-between gap-2 rounded-md bg-ink/[0.06] px-2.5 py-1.5">
             <span className="text-[15px] font-bold leading-none text-foreground">Book</span>
             <button
               onClick={toggleCollapsed}
-              className="p-0.5 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors shrink-0"
+              className="p-0.5 rounded hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors shrink-0"
               title="Collapse sidebar"
             >
               <ChevronLeft size={15} />
@@ -1033,7 +1033,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
                 }}
                 autoFocus
                 placeholder="Folder name"
-                className="w-full text-xs bg-white border border-border rounded px-2 py-1 outline-none focus:border-black/30"
+                className="w-full text-xs bg-background border border-border rounded px-2 py-1 outline-none focus:border-ink/30"
               />
             </div>
           )}
@@ -1043,37 +1043,37 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
             <div className="flex items-center gap-1">
               <button
                 onClick={() => createDocumentInContext()}
-                className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                className="p-1 rounded hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors"
                 title="New document"
               >
                 <Plus size={14} />
               </button>
               <button
                 onClick={() => createDocumentInContext("moodboard")}
-                className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                className="p-1 rounded hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors"
                 title="New moodboard"
               >
                 <LayoutGrid size={14} />
               </button>
               <button
                 onClick={() => setIsCreatingFolder(true)}
-                className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                className="p-1 rounded hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors"
                 title="New folder"
               >
                 <FolderIcon size={14} />
               </button>
               <button
                 onClick={() => setIsImportOpen(true)}
-                className="p-1 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                className="p-1 rounded hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors"
                 title="Import"
               >
                 <Upload size={14} />
               </button>
               <button
                 onClick={toggleGraph}
-                className={`p-1 rounded hover:bg-black/5 transition-colors ${
+                className={`p-1 rounded hover:bg-ink/5 transition-colors ${
                   isGraphOpen
-                    ? "bg-black/5 text-foreground"
+                    ? "bg-ink/5 text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
                 title="Graph"
@@ -1106,7 +1106,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
       {/* Drag overlay — floating ghost while dragging */}
       <DragOverlay dropAnimation={fadeInPlaceDropAnimation}>
         {(draggingDoc || draggingFolder) ? (
-          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-white shadow-md border border-border text-xs text-foreground opacity-90">
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-surface shadow-md border border-border text-xs text-foreground opacity-90">
             {draggingFolder ? (
               <FolderIcon size={13} className="text-muted-foreground shrink-0" />
             ) : (
@@ -1130,11 +1130,11 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
           isOpen
           onClose={() => setPendingDelete(null)}
           title={`Delete ${pendingDelete.type === "doc" ? "document" : "folder"}`}
-          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          panelClassName="bg-white rounded-xl shadow-xl w-[360px] overflow-hidden"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60"
+          panelClassName="bg-surface rounded-xl shadow-xl w-[360px] overflow-hidden"
         >
             <div className="px-5 pt-5 pb-3 flex items-start gap-3">
-              <div className="p-2 rounded-full bg-red-50 text-red-500 shrink-0 mt-0.5">
+              <div className="p-2 rounded-full bg-red-50 text-red-500 dark:bg-red-500/15 dark:text-red-400 shrink-0 mt-0.5">
                 <AlertTriangle size={18} />
               </div>
               <div>
@@ -1152,7 +1152,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-border">
               <button
                 onClick={() => setPendingDelete(null)}
-                className="px-3 py-1.5 text-xs rounded-lg text-foreground hover:bg-gray-100 transition-colors"
+                className="px-3 py-1.5 text-xs rounded-lg text-foreground hover:bg-ink/5 transition-colors"
               >
                 Cancel
               </button>
@@ -1169,12 +1169,12 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
       {/* Right-click context menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 bg-white rounded-lg border border-border shadow-lg py-1 min-w-[140px]"
+          className="fixed z-50 bg-surface rounded-lg border border-border shadow-lg py-1 min-w-[140px]"
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={(e) => e.stopPropagation()}
         >
           <button
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-black/5 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-ink/5 transition-colors"
             onClick={() => {
               if (contextMenu.type === "doc") {
                 addContextItem({
@@ -1197,7 +1197,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
             Add to context
           </button>
           <button
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-black/5 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-ink/5 transition-colors"
             onClick={() => {
               setRenamingItem({ type: contextMenu.type, id: contextMenu.id, name: contextMenu.name });
               setContextMenu(null);
@@ -1207,7 +1207,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings?: () => void }) {
             Rename
           </button>
           <button
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
             onClick={() => {
               if (contextMenu.type === "doc") requestDeleteDoc(contextMenu.id);
               else requestDeleteFolder(contextMenu.id);
@@ -1279,13 +1279,13 @@ function IconTooltipButton({
           framed
             ? `relative flex-1 flex items-center justify-center py-1.5 rounded-md transition-colors ${
                 active
-                  ? "bg-black/[0.12] text-foreground"
-                  : "bg-black/[0.06] text-muted-foreground hover:bg-black/[0.1] hover:text-foreground"
+                  ? "bg-ink/[0.12] text-foreground"
+                  : "bg-ink/[0.06] text-muted-foreground hover:bg-ink/[0.1] hover:text-foreground"
               }`
             : `relative p-1 rounded transition-colors ${
                 active
-                  ? "bg-black/5 text-foreground"
-                  : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+                  ? "bg-ink/5 text-foreground"
+                  : "text-muted-foreground hover:bg-ink/5 hover:text-foreground"
               }`
         }
       >
@@ -1301,7 +1301,7 @@ function IconTooltipButton({
               left: tooltipPos.left,
               transform: "translate(-50%, -100%)",
             }}
-            className="pointer-events-none z-[9999] px-1.5 py-0.5 rounded bg-neutral-100 text-neutral-800 text-[10px] font-medium leading-none whitespace-nowrap border border-neutral-200"
+            className="pointer-events-none z-[9999] px-1.5 py-0.5 rounded bg-neutral-100 text-neutral-800 text-[10px] font-medium leading-none whitespace-nowrap border border-neutral-200 dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700"
           >
             {label}
           </span>,
@@ -1432,8 +1432,8 @@ function SidebarSortMenu({
         onClick={() => setOpen((v) => !v)}
         className={`p-0.5 rounded shrink-0 transition-colors ${
           open
-            ? "bg-black/10 text-foreground"
-            : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+            ? "bg-ink/10 text-foreground"
+            : "text-muted-foreground hover:bg-ink/5 hover:text-foreground"
         }`}
       >
         <ListFilter size={12} />
@@ -1442,7 +1442,7 @@ function SidebarSortMenu({
         createPortal(
           <div
             ref={panelRef}
-            className="fixed z-[9999] flex items-center gap-1.5 bg-white border border-border rounded-lg shadow-lg px-1.5 py-1.5"
+            className="fixed z-[9999] flex items-center gap-1.5 bg-surface border border-border rounded-lg shadow-lg px-1.5 py-1.5"
             style={{ top: menuPos.top, left: menuPos.left, transform: "translateX(-100%)" }}
           >
             <div className="flex items-center rounded-md border border-border overflow-hidden">
@@ -1454,8 +1454,8 @@ function SidebarSortMenu({
                 onClick={() => onSortDirChange("asc")}
                 className={`p-1 transition-colors ${
                   sortDir === "asc"
-                    ? "bg-black/10 text-foreground"
-                    : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+                    ? "bg-ink/10 text-foreground"
+                    : "text-muted-foreground hover:bg-ink/5 hover:text-foreground"
                 }`}
               >
                 <ArrowUp size={12} />
@@ -1468,8 +1468,8 @@ function SidebarSortMenu({
                 onClick={() => onSortDirChange("desc")}
                 className={`p-1 transition-colors ${
                   sortDir === "desc"
-                    ? "bg-black/10 text-foreground"
-                    : "text-muted-foreground hover:bg-black/5 hover:text-foreground"
+                    ? "bg-ink/10 text-foreground"
+                    : "text-muted-foreground hover:bg-ink/5 hover:text-foreground"
                 }`}
               >
                 <ArrowDown size={12} />
@@ -1481,7 +1481,7 @@ function SidebarSortMenu({
                 aria-label="Sort by"
                 value={sortMode}
                 onChange={(e) => onSortModeChange(e.target.value as SidebarSortMode)}
-                className="text-xs font-medium bg-white border border-border rounded-md px-1.5 py-1 outline-none focus:border-black/30 text-foreground"
+                className="text-xs font-medium bg-background border border-border rounded-md px-1.5 py-1 outline-none focus:border-ink/30 text-foreground"
               >
                 {SORT_MODES.map((mode) => (
                   <option key={mode.value} value={mode.value}>
@@ -1591,8 +1591,8 @@ function FolderItem({
             : isOver
             ? "bg-accent/40 ring-1 ring-accent"
             : isSelected
-            ? "bg-blue-100/50"
-            : "hover:bg-black/5"
+            ? "bg-blue-100/50 dark:bg-blue-500/20"
+            : "hover:bg-ink/5"
         }`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={(e) => {
@@ -1646,7 +1646,7 @@ function FolderItem({
             }}
             onClick={(e) => e.stopPropagation()}
             autoFocus
-            className="flex-1 text-xs bg-white border border-border rounded px-1 py-0 outline-none focus:border-black/30 min-w-0"
+            className="flex-1 text-xs bg-background border border-border rounded px-1 py-0 outline-none focus:border-ink/30 min-w-0"
           />
         ) : (
           <span className="text-xs text-foreground truncate flex-1">
@@ -1660,7 +1660,7 @@ function FolderItem({
                 e.stopPropagation();
                 onCreateDoc(folder.id);
               }}
-              className="p-0.5 rounded hover:bg-black/10 text-muted-foreground"
+              className="p-0.5 rounded hover:bg-ink/10 text-muted-foreground"
               title="New doc in folder"
             >
               <Plus size={11} />
@@ -1670,7 +1670,7 @@ function FolderItem({
                 e.stopPropagation();
                 onDeleteFolder(folder.id);
               }}
-              className="p-0.5 rounded hover:bg-black/10 text-muted-foreground"
+              className="p-0.5 rounded hover:bg-ink/10 text-muted-foreground"
               title="Delete folder"
             >
               <Trash2 size={11} />
@@ -1832,10 +1832,10 @@ function DraggableDocItem({
             : isOver
             ? "bg-accent/40 ring-1 ring-accent"
             : isSelected
-            ? "bg-blue-100/50"
+            ? "bg-blue-100/50 dark:bg-blue-500/20"
             : isActive
-            ? "bg-black/5"
-            : "hover:bg-black/[0.03]"
+            ? "bg-ink/5"
+            : "hover:bg-ink/[0.03]"
         }`}
         style={{ paddingLeft: `${depth * 16 + (hasChildren ? 8 : 24)}px` }}
         onClick={(e) => {
@@ -1891,7 +1891,7 @@ function DraggableDocItem({
             }}
             onClick={(e) => e.stopPropagation()}
             autoFocus
-            className="flex-1 text-xs bg-white border border-border rounded px-1 py-0 outline-none focus:border-black/30 min-w-0"
+            className="flex-1 text-xs bg-background border border-border rounded px-1 py-0 outline-none focus:border-ink/30 min-w-0"
           />
         ) : (
           <span className="text-xs text-foreground truncate flex-1">
@@ -1904,7 +1904,7 @@ function DraggableDocItem({
               e.stopPropagation();
               onDelete(doc.id);
             }}
-            className="p-0.5 rounded hover:bg-black/10 text-muted-foreground"
+            className="p-0.5 rounded hover:bg-ink/10 text-muted-foreground"
             title="Delete"
           >
             <Trash2 size={11} />

@@ -92,7 +92,7 @@ export function PdfAnnotationPopover({
       <div className="fixed inset-0 z-[60]" onClick={onClose} />
 
       <div
-        className="fixed z-[61] bg-white rounded-xl shadow-lg border border-border flex flex-col"
+        className="fixed z-[61] bg-surface rounded-xl shadow-lg border border-border flex flex-col"
         style={{
           left: position.x,
           top: position.y,
@@ -114,20 +114,20 @@ export function PdfAnnotationPopover({
                 key={c}
                 onClick={() => onUpdateColor(annotation.id, c)}
                 className={`w-3 h-3 rounded-full ${COLOR_CSS[c]} transition-all ${
-                  annotation.color === c ? "ring-1 ring-offset-1 ring-black/30 scale-110" : "opacity-60 hover:opacity-100"
+                  annotation.color === c ? "ring-1 ring-offset-1 ring-offset-surface ring-ink/30 scale-110" : "opacity-60 hover:opacity-100"
                 }`}
               />
             ))}
             <button
               onClick={() => onDelete(annotation.id)}
-              className="p-0.5 rounded hover:bg-red-50 text-muted-foreground hover:text-red-500 transition-colors ml-1"
+              className="p-0.5 rounded hover:bg-red-50 dark:hover:bg-red-500/10 text-muted-foreground hover:text-red-500 dark:hover:text-red-400 transition-colors ml-1"
               title="Delete"
             >
               <Trash2 size={12} />
             </button>
             <button
               onClick={onClose}
-              className="p-0.5 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+              className="p-0.5 rounded hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors"
             >
               <X size={14} />
             </button>
@@ -152,7 +152,7 @@ export function PdfAnnotationPopover({
               onChange={(e) => handleNoteChange(e.target.value)}
               placeholder="Write a note…"
               rows={4}
-              className="w-full text-xs bg-transparent border border-border rounded-lg p-2 outline-none resize-none placeholder:text-black/20"
+              className="w-full text-xs bg-transparent border border-border rounded-lg p-2 outline-none resize-none placeholder:text-ink/20"
               autoFocus
             />
           </div>
@@ -211,12 +211,12 @@ export function PdfAnnotationPopover({
                   placeholder={isSending ? "Waiting…" : "Type to chat…"}
                   rows={2}
                   disabled={isSending}
-                  className="flex-1 text-xs bg-transparent border border-border rounded-lg p-2 outline-none resize-none placeholder:text-black/20 disabled:opacity-50"
+                  className="flex-1 text-xs bg-transparent border border-border rounded-lg p-2 outline-none resize-none placeholder:text-ink/20 disabled:opacity-50"
                 />
                 <button
                   onClick={handleChatSend}
                   disabled={isSending || !chatInput.trim()}
-                  className="self-end p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-black/5 disabled:opacity-30 transition-colors"
+                  className="self-end p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-ink/5 disabled:opacity-30 transition-colors"
                 >
                   <Send size={14} />
                 </button>

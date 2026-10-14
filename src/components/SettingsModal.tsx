@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { X, Loader2, BarChart3, DollarSign, Zap, Clock, LogOut } from "lucide-react";
+import { X, Loader2, BarChart3, DollarSign, Zap, Clock, LogOut, Sun, Moon, Monitor, Palette, type LucideIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { useTheme, type ThemePreference } from "@/lib/theme";
 import { Modal } from "@/components/Modal";
 
 import { authedFetch } from "@/lib/apiFetch";
@@ -56,6 +57,12 @@ const MODEL_LABELS: Record<string, string> = {
   "text-embedding-3-small": "Embeddings",
 };
 
+const THEME_OPTIONS: { value: ThemePreference; label: string; Icon: LucideIcon }[] = [
+  { value: "light", label: "Light", Icon: Sun },
+  { value: "dark", label: "Dark", Icon: Moon },
+  { value: "system", label: "System", Icon: Monitor },
+];
+
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
@@ -70,6 +77,7 @@ function formatCost(usd: number): string {
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { user, signOut } = useAuth();
+  const { preference: themePreference, setPreference: setThemePreference } = useTheme();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +124,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       isOpen={isOpen}
       onClose={onClose}
       title="Settings"
-      panelClassName="bg-white rounded-xl shadow-xl w-[560px] max-h-[80vh] overflow-hidden flex flex-col"
+      panelClassName="bg-surface rounded-xl shadow-xl w-[560px] max-h-[80vh] overflow-hidden flex flex-col"
     >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
@@ -133,8 +141,40 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
+          {/* ─── Appearance ─── */}
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+                <Palette size={15} />
+                Appearance
+              </h3>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                System follows your device&apos;s light or dark setting.
+              </p>
+            </div>
+            <div role="radiogroup" aria-label="Theme" className="flex gap-1 shrink-0">
+              {THEME_OPTIONS.map(({ value, label, Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={themePreference === value}
+                  onClick={() => setThemePreference(value)}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                    themePreference === value
+                      ? "bg-foreground text-background"
+                      : "bg-ink/5 text-muted-foreground hover:bg-ink/10"
+                  }`}
+                >
+                  <Icon size={11} />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* ─── AI Usage Dashboard ─── */}
-          <div>
+          <div className="pt-5 border-t border-border">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
                 <BarChart3 size={15} />
@@ -147,8 +187,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     onClick={() => setDays(d)}
                     className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
                       days === d
-                        ? "bg-black text-white"
-                        : "bg-black/5 text-muted-foreground hover:bg-black/10"
+                        ? "bg-foreground text-background"
+                        : "bg-ink/5 text-muted-foreground hover:bg-ink/10"
                     }`}
                   >
                     {d}d
@@ -165,7 +205,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             )}
 
             {error && (
-              <div className="text-center py-6 text-xs text-red-500">
+              <div className="text-center py-6 text-xs text-red-500 dark:text-red-400">
                 {error}
               </div>
             )}
@@ -174,7 +214,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <>
                 {/* Summary cards */}
                 <div className="grid grid-cols-3 gap-3 mb-5">
-                  <div className="bg-neutral-50 rounded-lg p-3">
+                  <div className="bg-ink/2 rounded-lg p-3">
                     <div className="flex items-center gap-1.5 text-muted-foreground text-[11px] mb-1">
                       <Zap size={12} />
                       API Calls
@@ -183,7 +223,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                       {usage.totalCalls.toLocaleString()}
                     </div>
                   </div>
-                  <div className="bg-neutral-50 rounded-lg p-3">
+                  <div className="bg-ink/2 rounded-lg p-3">
                     <div className="flex items-center gap-1.5 text-muted-foreground text-[11px] mb-1">
                       <Clock size={12} />
                       Total Tokens
@@ -196,7 +236,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                       {formatTokens(usage.totalOutput)} out
                     </div>
                   </div>
-                  <div className="bg-neutral-50 rounded-lg p-3">
+                  <div className="bg-ink/2 rounded-lg p-3">
                     <div className="flex items-center gap-1.5 text-muted-foreground text-[11px] mb-1">
                       <DollarSign size={12} />
                       Est. Cost
@@ -228,7 +268,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             style={{ height: "100%" }}
                           >
                             {/* Tooltip */}
-                            <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap bg-neutral-100 text-neutral-800 text-[10px] px-2 py-1 rounded border border-neutral-200 pointer-events-none">
+                            <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap bg-neutral-100 text-neutral-800 text-[10px] px-2 py-1 rounded border border-neutral-200 dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700 pointer-events-none">
                               <div className="font-medium">{day}</div>
                               <div>
                                 {formatTokens(total)} tokens · {val.calls}{" "}
@@ -283,7 +323,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     <div className="border border-border rounded-lg overflow-hidden">
                       <table className="w-full text-xs">
                         <thead>
-                          <tr className="bg-neutral-50 text-muted-foreground">
+                          <tr className="bg-ink/2 text-muted-foreground">
                             <th className="text-left px-3 py-1.5 font-medium">
                               Model
                             </th>
@@ -344,7 +384,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     <div className="border border-border rounded-lg overflow-hidden">
                       <table className="w-full text-xs">
                         <thead>
-                          <tr className="bg-neutral-50 text-muted-foreground">
+                          <tr className="bg-ink/2 text-muted-foreground">
                             <th className="text-left px-3 py-1.5 font-medium">
                               Feature
                             </th>
@@ -411,7 +451,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 </div>
                 <button
                   onClick={signOut}
-                  className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-black/5 transition-colors"
+                  className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-ink/5 transition-colors"
                 >
                   <LogOut size={13} />
                   Log out

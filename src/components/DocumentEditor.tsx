@@ -36,6 +36,7 @@ import {
 import { X, FileText, FilePlus, MessageSquarePlus, MessageSquare, Trash2, Table2, Plus } from "lucide-react";
 import { AnnotationChat } from "@/components/AnnotationChat";
 import { NoteSettingsButton } from "@/components/NoteSettingsButton";
+import { useResolvedTheme } from "@/lib/theme";
 
 import { authedFetch } from "@/lib/apiFetch";
 type SyncStatus = "synced" | "pending" | "saving" | "conflict" | "error";
@@ -322,7 +323,7 @@ function AnnotationMarkers({
         m.id === activeAnnotation?.id ? null : (
           <button
             key={m.id}
-            className="absolute right-4 z-10 w-6 h-6 rounded-full bg-yellow-100 border border-yellow-300 flex items-center justify-center hover:bg-yellow-200 transition-colors"
+            className="absolute right-4 z-10 w-6 h-6 rounded-full bg-yellow-100 border border-yellow-300 flex items-center justify-center hover:bg-yellow-200 dark:bg-yellow-500/15 dark:border-yellow-500/40 dark:hover:bg-yellow-500/25 transition-colors"
             style={{ top: m.top }}
             title={`"${m.annotation.highlightedText.slice(0, 40)}${m.annotation.highlightedText.length > 40 ? "…" : ""}"`}
             onClick={() => openExistingAnnotation(m.annotation)}
@@ -331,7 +332,7 @@ function AnnotationMarkers({
               setContextMenu({ x: e.clientX, y: e.clientY, annotationId: m.id });
             }}
           >
-            <MessageSquare size={10} className="text-yellow-600" />
+            <MessageSquare size={10} className="text-yellow-600 dark:text-yellow-400" />
           </button>
         )
       )}
@@ -339,11 +340,11 @@ function AnnotationMarkers({
       {/* Right-click context menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 bg-white rounded-lg border border-border shadow-lg py-1 min-w-[140px]"
+          className="fixed z-50 bg-surface rounded-lg border border-border shadow-lg py-1 min-w-[140px]"
           style={{ top: contextMenu.y, left: contextMenu.x - 150 }}
         >
           <button
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
             onClick={() => {
               deleteAnnotationById(contextMenu.annotationId);
               setContextMenu(null);
@@ -426,6 +427,7 @@ function FloatingAnnotationChat({
 }
 
 export function DocumentEditor({ document }: DocumentEditorProps) {
+  const theme = useResolvedTheme();
   const saveDocument = useAppStore((s) => s.saveDocument);
   const _dbDocuments = useAppStore((s) => s._dbDocuments);
   const [title, setTitle] = useState(document.title);
@@ -1148,14 +1150,14 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
               <button
                 type="button"
                 onClick={resolveLoadTheirs}
-                className="px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-black/5 transition-colors"
+                className="px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-ink/5 transition-colors"
               >
                 Load theirs
               </button>
               <button
                 type="button"
                 onClick={resolveKeepMine}
-                className="px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-black/5 transition-colors"
+                className="px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-ink/5 transition-colors"
               >
                 Keep mine
               </button>
@@ -1233,12 +1235,12 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
               value={entryInput}
               onChange={(e) => setEntryInput(e.target.value)}
               placeholder={document.docType === "todo" ? "Add a todo…" : "Jot something down…"}
-              className="flex-1 text-sm px-3 py-1.5 rounded-lg border border-border bg-white focus:outline-none focus:ring-1 focus:ring-black/10 placeholder:text-muted-foreground/60"
+              className="flex-1 text-sm px-3 py-1.5 rounded-lg border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ink/10 placeholder:text-muted-foreground/60"
             />
             <button
               type="submit"
               disabled={!entryInput.trim()}
-              className="shrink-0 p-1.5 rounded-lg border border-border hover:bg-black/5 disabled:opacity-30 disabled:cursor-default transition-colors"
+              className="shrink-0 p-1.5 rounded-lg border border-border hover:bg-ink/5 disabled:opacity-30 disabled:cursor-default transition-colors"
             >
               <Plus size={16} />
             </button>
@@ -1274,7 +1276,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
             {tags.map((tag) => (
               <span
                 key={tag}
-                className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full border border-border text-muted-foreground bg-white"
+                className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full border border-border text-muted-foreground bg-background"
                 style={{ fontSize: "calc(var(--note-font-size, 16px) * 0.8125)" }}
               >
                 {tag}
@@ -1314,7 +1316,7 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
         <BlockNoteView
           editor={editor}
           onChange={isIndexDoc ? undefined : handleEditorChange}
-          theme="light"
+          theme={theme}
           editable={!isIndexDoc}
           slashMenu={false}
           sideMenu={false}

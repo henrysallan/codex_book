@@ -547,12 +547,12 @@ export function FileViewer({ fileId, fileName, mimeType, webViewLink }: FileView
         <div className="flex gap-2">
           {webViewLink && (
             <a href={webViewLink} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-border hover:border-black/20 transition-colors">
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-border hover:border-ink/20 transition-colors">
               <ExternalLink size={12} /> Open in Drive
             </a>
           )}
           <button onClick={handleDownload}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-border hover:border-black/20 transition-colors">
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-border hover:border-ink/20 transition-colors">
             <Download size={12} /> Download
           </button>
         </div>
@@ -563,13 +563,13 @@ export function FileViewer({ fileId, fileName, mimeType, webViewLink }: FileView
   return (
     <div className="h-full flex flex-col">
       {/* ── Toolbar ─────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-white shrink-0">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-background shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground truncate max-w-[200px]">
             {fileName}
           </span>
           {isPdf && numPages > 0 && (
-            <span className="text-[10px] text-muted-foreground bg-black/5 rounded px-1.5 py-0.5">
+            <span className="text-[10px] text-muted-foreground bg-ink/5 rounded px-1.5 py-0.5">
               {currentPage} / {numPages}
             </span>
           )}
@@ -582,7 +582,7 @@ export function FileViewer({ fileId, fileName, mimeType, webViewLink }: FileView
               <Highlighter size={13} className="text-muted-foreground mr-0.5" />
               <button
                 onClick={goToPrevAnnotation}
-                className="p-1 rounded hover:bg-black/5 text-muted-foreground disabled:opacity-30"
+                className="p-1 rounded hover:bg-ink/5 text-muted-foreground disabled:opacity-30"
                 disabled={resolvedHighlights.length === 0}
                 title="Previous annotation"
               >
@@ -595,7 +595,7 @@ export function FileViewer({ fileId, fileName, mimeType, webViewLink }: FileView
               </span>
               <button
                 onClick={goToNextAnnotation}
-                className="p-1 rounded hover:bg-black/5 text-muted-foreground disabled:opacity-30"
+                className="p-1 rounded hover:bg-ink/5 text-muted-foreground disabled:opacity-30"
                 disabled={resolvedHighlights.length === 0}
                 title="Next annotation"
               >
@@ -607,24 +607,24 @@ export function FileViewer({ fileId, fileName, mimeType, webViewLink }: FileView
           {(isPdf || isImage) && (
             <div className="flex items-center gap-0.5 mr-2">
               <button onClick={() => setZoom((z) => Math.max(25, z - 25))}
-                className="p-1 rounded hover:bg-black/5 text-muted-foreground" title="Zoom out">
+                className="p-1 rounded hover:bg-ink/5 text-muted-foreground" title="Zoom out">
                 <ZoomOut size={14} />
               </button>
               <span className="text-[10px] text-muted-foreground w-8 text-center">{zoom}%</span>
               <button onClick={() => setZoom((z) => Math.min(300, z + 25))}
-                className="p-1 rounded hover:bg-black/5 text-muted-foreground" title="Zoom in">
+                className="p-1 rounded hover:bg-ink/5 text-muted-foreground" title="Zoom in">
                 <ZoomIn size={14} />
               </button>
             </div>
           )}
 
           <button onClick={handleDownload}
-            className="flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-black/5 text-muted-foreground">
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-ink/5 text-muted-foreground">
             <Download size={12} /> Download
           </button>
           {webViewLink && (
             <a href={webViewLink} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-black/5 text-muted-foreground">
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-ink/5 text-muted-foreground">
               <ExternalLink size={12} /> Drive
             </a>
           )}
@@ -632,7 +632,7 @@ export function FileViewer({ fileId, fileName, mimeType, webViewLink }: FileView
       </div>
 
       {/* ── Content ─────────────────────────────────────── */}
-      <div ref={containerRef} className="flex-1 min-h-0 overflow-auto bg-neutral-100">
+      <div ref={containerRef} className="flex-1 min-h-0 overflow-auto bg-ink/4">
         {isPdf ? (
           <div className="flex flex-col items-center py-6 gap-4">
             <Document
@@ -715,12 +715,12 @@ export function FileViewer({ fileId, fileName, mimeType, webViewLink }: FileView
             <p className="text-sm">Preview not available for this file type.</p>
             <div className="flex gap-2">
               <button onClick={handleDownload}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-border hover:border-black/20">
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-border hover:border-ink/20">
                 <Download size={12} /> Download
               </button>
               {webViewLink && (
                 <a href={webViewLink} target="_blank" rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-border hover:border-black/20">
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-border hover:border-ink/20">
                   <ExternalLink size={12} /> Open in Drive
                 </a>
               )}

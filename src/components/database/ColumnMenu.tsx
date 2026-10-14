@@ -91,7 +91,7 @@ export function ColumnMenu({
           setShowAddOption(false);
         }}
         onMouseDown={(e) => e.stopPropagation()}
-        className="p-0.5 rounded hover:bg-gray-200 transition-colors"
+        className="p-0.5 rounded hover:bg-ink/10 transition-colors"
       >
         <ChevronDown size={12} />
       </button>
@@ -99,7 +99,7 @@ export function ColumnMenu({
       {open && createPortal(
         <div
           ref={dropdownRef}
-          className="fixed bg-white shadow-lg rounded-lg border py-1 min-w-[160px]"
+          className="fixed bg-surface shadow-lg rounded-lg border border-border py-1 min-w-[160px]"
           style={{ zIndex: 99999, top: menuPos.top, left: menuPos.left }}
         >
           {/* Rename */}
@@ -116,12 +116,12 @@ export function ColumnMenu({
                   e.stopPropagation();
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
-                className="w-full text-sm px-2 py-1 border rounded outline-none focus:border-blue-400"
+                className="w-full text-sm px-2 py-1 border border-border rounded bg-background outline-none focus:border-blue-400"
               />
             </div>
           ) : (
             <button
-              className="block w-full text-left px-3 py-1.5 hover:bg-gray-100 text-sm"
+              className="block w-full text-left px-3 py-1.5 hover:bg-ink/5 text-sm"
               onClick={(e) => {
                 e.stopPropagation();
                 setRenameDraft(column.name);
@@ -134,7 +134,7 @@ export function ColumnMenu({
 
           {/* Change type */}
           <button
-            className="block w-full text-left px-3 py-1.5 hover:bg-gray-100 text-sm"
+            className="block w-full text-left px-3 py-1.5 hover:bg-ink/5 text-sm"
             onClick={(e) => {
               e.stopPropagation();
               setShowTypeMenu(!showTypeMenu);
@@ -143,14 +143,14 @@ export function ColumnMenu({
             Type: {COLUMN_TYPES.find((t) => t.type === column.type)?.label}
           </button>
           {showTypeMenu && (
-            <div className="border-t border-b my-1 py-1">
+            <div className="border-t border-b border-border my-1 py-1">
               {COLUMN_TYPES.map((ct) => (
                 <button
                   key={ct.type}
                   className={`flex items-center gap-2 w-full text-left px-3 py-1 text-sm ${
                     ct.type === column.type
-                      ? "bg-blue-50 text-blue-600"
-                      : "hover:bg-gray-100"
+                      ? "bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300"
+                      : "hover:bg-ink/5"
                   }`}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -185,13 +185,13 @@ export function ColumnMenu({
                     }}
                     onMouseDown={(e) => e.stopPropagation()}
                     placeholder="Option name..."
-                    className="w-full text-sm px-2 py-1 border rounded outline-none focus:border-blue-400"
+                    className="w-full text-sm px-2 py-1 border border-border rounded bg-background outline-none focus:border-blue-400"
                     autoFocus
                   />
                 </div>
               ) : (
                 <button
-                  className="block w-full text-left px-3 py-1.5 hover:bg-gray-100 text-sm"
+                  className="block w-full text-left px-3 py-1.5 hover:bg-ink/5 text-sm"
                   onClick={(e) => {
                     e.stopPropagation();
                     setShowAddOption(true);
@@ -205,7 +205,7 @@ export function ColumnMenu({
 
           {/* Delete */}
           <button
-            className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-red-50 text-sm text-red-600"
+            className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-red-50 dark:hover:bg-red-500/10 text-sm text-red-600 dark:text-red-400"
             onClick={(e) => {
               e.stopPropagation();
               onDelete();

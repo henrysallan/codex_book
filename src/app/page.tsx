@@ -108,7 +108,7 @@ export default function Home() {
   // Show loading while auth is resolving
   if (authLoading) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-white">
+      <div className="h-screen w-screen flex items-center justify-center bg-background">
         <p className="text-sm text-muted-foreground">Loading&hellip;</p>
       </div>
     );
@@ -121,14 +121,14 @@ export default function Home() {
 
   if (isLoading) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-white">
+      <div className="h-screen w-screen flex items-center justify-center bg-background">
         <p className="text-sm text-muted-foreground">Loading&hellip;</p>
       </div>
     );
   }
 
   return (
-    <div className="h-screen w-screen flex overflow-hidden bg-white">
+    <div className="h-screen w-screen flex overflow-hidden bg-background">
       {/* Left Panel - File Tree */}
       <Sidebar onOpenSettings={() => setIsSettingsOpen(true)} />
 
@@ -153,7 +153,7 @@ export default function Home() {
           className="absolute left-0 top-0 bottom-0 w-2 cursor-col-resize z-10"
         />
         <div className="h-full p-2" style={{ width: `${chatWidth + 16}px` }}>
-          <div className="h-full rounded-md border border-border bg-white overflow-hidden">
+          <div className="h-full rounded-md border border-border bg-background overflow-hidden">
             <ChatPanel />
           </div>
         </div>

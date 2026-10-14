@@ -25,7 +25,7 @@ Three design commitments that explain most of the code:
 | Layer | Choice |
 |---|---|
 | Framework | Next.js 16.1.6 App Router, React 19.2, TypeScript strict |
-| Styling | Tailwind CSS v4 (`@import "tailwindcss"`, CSS-var theme in [globals.css](src/app/globals.css)) |
+| Styling | Tailwind CSS v4 (`@import "tailwindcss"`, CSS-var theme in [globals.css](src/app/globals.css)); light/dark/system theme via a `dark` class on `<html>` |
 | Editor | BlockNote 0.47 (`core` + `react` + `mantine` + `xl-multi-column`), ProseMirror underneath |
 | Client state | Zustand — one store, [src/lib/store.ts](src/lib/store.ts) |
 | DB / auth / storage | Supabase (Postgres + pgvector + pg_trgm + Auth + Storage) |
@@ -70,8 +70,8 @@ The app degrades rather than crashes when Supabase is unconfigured (`isSupabaseC
 ```
 src/app/
   page.tsx                 3-panel shell, auth gate, ⌘P handler, chat resize
-  layout.tsx               AuthProvider + Inter font
-  globals.css              theme vars + BlockNote/table/tldraw overrides
+  layout.tsx               AuthProvider + Inter font + inline no-flash theme script
+  globals.css              theme tokens (light + dark) + BlockNote/table/tldraw overrides
   api/ai/{chat,annotate,index,backfill,usage}/route.ts
   api/drive/token/route.ts, api/share/[slug]/route.ts
   share/[slug]/            public read-only document view
@@ -83,6 +83,7 @@ src/lib/
   types.ts                 Db* (snake_case rows) + client-side camelCase types
   graph/                   full-database node graph (build, worker layout, canvas renderer)
   auth.tsx                 AuthProvider / useAuth, Google OAuth + Drive scope
+  theme.ts, themeInit.ts   theme preference store (useTheme / useResolvedTheme) + pre-paint script
   supabase.ts              browser client (anon key)
   supabaseServer.ts        server client (service role) — never import client-side
   editorSchema.ts          BlockNote schema: default blocks + database + pageLink
@@ -191,6 +192,14 @@ Postgres functions callable via `supabase.rpc(...)`: `search_documents` (FTS + t
 - **Heavy components** (`FileViewer`, `MoodboardCanvas`) are loaded with `next/dynamic` + `ssr: false`.
 - **Types:** DB rows are snake_case `DbDocument`/`DbFolder`; client types are camelCase `Document`/`Folder`. Convert at the `db.ts` boundary (`dbDocumentToDocument`).
 - **Styling:** Tailwind utility classes with semantic theme tokens — `bg-sidebar-bg`, `border-border`, `text-muted-foreground`. Third-party widget overrides (BlockNote, tables, tldraw) go in `globals.css`, not inline.
+- **Dark mode:** every colour must work in both themes, so never hard-code `bg-white`, `bg-black/x`, `text-gray-*` or hex values. Use the tokens instead:
+  - `bg-background` for page-level panels, cards and inputs; `bg-surface` for floating layers (menus, popovers, dialogs, dropdowns).
+  - `bg-ink/5`, `hover:bg-ink/10`, `border-ink/20`, `ring-ink/10` for tints — `ink` is black in light and white in dark. Keep `bg-black/x` only for modal scrims (add a stronger `dark:` value).
+  - Solid inverted elements: `bg-foreground text-background`.
+  - Status colours (red/blue/yellow/green) need a `dark:` pair, e.g. `text-red-600 dark:text-red-400`, `hover:bg-red-50 dark:hover:bg-red-500/10`.
+  - Inline styles and canvas code read CSS variables (`var(--page-link-fg)`, `--db-*`); add new ones to both `:root` and `:root.dark` in `globals.css`. Keep the core tokens hex — the graph renderer alpha-blends them.
+  - Third-party widgets take the resolved theme from `useResolvedTheme()` (BlockNote's `theme` prop, tldraw's `colorScheme` preference).
+  - The preference (`cortex:theme` in localStorage: `light` | `dark` | `system`, default `system`) is set from Settings → Appearance or the ⌘P palette ("theme").
 - **Icons:** `lucide-react`, typically `size={14}`/`size={16}`.
 - **Store selectors:** subscribe narrowly — `useAppStore((s) => s.activeDocument)` — never destructure the whole store.
 - **API routes:** `export const runtime = "nodejs"` and an explicit `maxDuration`; log with a `[/api/...]` prefix; return `NextResponse.json({ error }, { status })` on failure.

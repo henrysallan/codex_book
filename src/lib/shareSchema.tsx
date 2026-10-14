@@ -30,8 +30,8 @@ function SharePageLinkView(props: {
   return (
     <span
       style={{
-        backgroundColor: "rgba(35, 131, 226, 0.14)",
-        color: "rgb(35, 131, 226)",
+        backgroundColor: "var(--page-link-bg)",
+        color: "var(--page-link-fg)",
         padding: "1px 6px",
         borderRadius: "3px",
         cursor: slug ? "pointer" : "default",
@@ -121,7 +121,7 @@ const ShareDatabaseBlock = createReactBlockSpec(
                             display: "inline-block",
                             padding: "1px 8px",
                             borderRadius: "3px",
-                            backgroundColor: "#f0f0f0",
+                            backgroundColor: "var(--db-chip)",
                             fontSize: "0.8125rem",
                           }}
                         >

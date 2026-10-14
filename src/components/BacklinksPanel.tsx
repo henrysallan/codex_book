@@ -64,7 +64,7 @@ export function BacklinksPanel() {
 
       {!isLoading && !hasLinks && (
         <p className="text-xs text-muted">
-          No backlinks yet. Use <code className="bg-neutral-100 px-1 py-0.5 rounded text-[11px]">[[Document Title]]</code> to link between documents.
+          No backlinks yet. Use <code className="bg-ink/4 px-1 py-0.5 rounded text-[11px]">[[Document Title]]</code> to link between documents.
         </p>
       )}
 
@@ -82,7 +82,7 @@ export function BacklinksPanel() {
               <button
                 key={link.documentId}
                 onClick={() => openDocument(link.documentId)}
-                className="text-xs px-2.5 py-1 rounded-full border border-border hover:border-black/20 hover:bg-neutral-50 transition-colors text-foreground"
+                className="text-xs px-2.5 py-1 rounded-full border border-border hover:border-ink/20 hover:bg-ink/2 transition-colors text-foreground"
               >
                 {link.documentTitle}
               </button>
@@ -105,7 +105,7 @@ export function BacklinksPanel() {
               <button
                 key={link.documentId}
                 onClick={() => openDocument(link.documentId)}
-                className="text-xs px-2.5 py-1 rounded-full border border-border hover:border-black/20 hover:bg-neutral-50 transition-colors text-foreground"
+                className="text-xs px-2.5 py-1 rounded-full border border-border hover:border-ink/20 hover:bg-ink/2 transition-colors text-foreground"
               >
                 {link.documentTitle}
               </button>

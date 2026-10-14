@@ -73,13 +73,13 @@ export function TabBar() {
   );
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 overflow-x-auto bg-white">
+    <div className="flex items-center gap-2 px-3 py-1.5 overflow-x-auto bg-background">
       {/* Back / Forward */}
       <div className="flex items-center gap-0.5 shrink-0 mr-1">
         <button
           onClick={() => goBack()}
           disabled={!canGoBack()}
-          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-black/5 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-ink/5 transition-colors disabled:opacity-30 disabled:pointer-events-none"
           title="Go back"
         >
           <ChevronLeft size={14} />
@@ -87,7 +87,7 @@ export function TabBar() {
         <button
           onClick={() => goForward()}
           disabled={!canGoForward()}
-          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-black/5 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-ink/5 transition-colors disabled:opacity-30 disabled:pointer-events-none"
           title="Go forward"
         >
           <ChevronRight size={14} />
@@ -104,10 +104,10 @@ export function TabBar() {
             isGraphOpen: false,
           })
         }
-        className={`flex items-center justify-center px-3 py-1 rounded-full border cursor-pointer transition-colors shrink-0 bg-blue-50 ${
+        className={`flex items-center justify-center px-3 py-1 rounded-full border cursor-pointer transition-colors shrink-0 bg-blue-50 dark:bg-blue-500/10 ${
           isHome
-            ? "border-blue-200"
-            : "border-blue-100 hover:border-blue-200"
+            ? "border-blue-200 dark:border-blue-500/40"
+            : "border-blue-100 hover:border-blue-200 dark:border-blue-500/20 dark:hover:border-blue-500/40"
         }`}
         title="Home"
       >
@@ -120,8 +120,8 @@ export function TabBar() {
             key={tab.documentId}
             className={`flex items-center gap-1.5 px-3 py-1 rounded-full border cursor-pointer transition-colors shrink-0 ${
               isActive
-                ? "border-black/20 bg-black/[0.08]"
-                : "border-border hover:border-black/15 bg-transparent"
+                ? "border-ink/20 bg-ink/[0.08]"
+                : "border-border hover:border-ink/15 bg-transparent"
             }`}
             onClick={() => {
               if (tab.driveFile) {
@@ -154,7 +154,7 @@ export function TabBar() {
                 closeTab(tab.documentId);
               }}
               aria-label={`Close ${tab.title}`}
-              className="ml-1 p-0.5 rounded-full hover:bg-black/10 text-muted-foreground hover:text-foreground transition-colors"
+              className="ml-1 p-0.5 rounded-full hover:bg-ink/10 text-muted-foreground hover:text-foreground transition-colors"
             >
               <X size={10} />
             </button>
@@ -166,11 +166,11 @@ export function TabBar() {
       {ctxMenu && (
         <div
           ref={menuRef}
-          className="fixed z-50 min-w-[160px] rounded-lg border border-border bg-white shadow-lg py-1 text-xs"
+          className="fixed z-50 min-w-[160px] rounded-lg border border-border bg-surface shadow-lg py-1 text-xs"
           style={{ top: ctxMenu.y, left: ctxMenu.x }}
         >
           <button
-            className="w-full text-left px-3 py-1.5 hover:bg-black/5 text-foreground transition-colors"
+            className="w-full text-left px-3 py-1.5 hover:bg-ink/5 text-foreground transition-colors"
             onClick={() => {
               closeTab(ctxMenu.tabId);
               setCtxMenu(null);
@@ -179,20 +179,20 @@ export function TabBar() {
             Close
           </button>
           <button
-            className="w-full text-left px-3 py-1.5 hover:bg-black/5 text-foreground transition-colors"
+            className="w-full text-left px-3 py-1.5 hover:bg-ink/5 text-foreground transition-colors"
             onClick={() => closeOtherTabs(ctxMenu.tabId)}
           >
             Close Others
           </button>
           <button
-            className="w-full text-left px-3 py-1.5 hover:bg-black/5 text-foreground transition-colors"
+            className="w-full text-left px-3 py-1.5 hover:bg-ink/5 text-foreground transition-colors"
             onClick={() => closeTabsToRight(ctxMenu.tabId)}
           >
             Close to the Right
           </button>
           <div className="my-1 border-t border-border" />
           <button
-            className="w-full text-left px-3 py-1.5 hover:bg-black/5 text-foreground transition-colors"
+            className="w-full text-left px-3 py-1.5 hover:bg-ink/5 text-foreground transition-colors"
             onClick={closeAllTabs}
           >
             Close All

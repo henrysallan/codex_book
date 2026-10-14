@@ -8,7 +8,7 @@ export default function Error({
   reset: () => void;
 }) {
   return (
-    <div className="min-h-screen bg-white flex items-center justify-center px-6">
+    <div className="min-h-screen bg-background flex items-center justify-center px-6">
       <div className="text-center space-y-3 max-w-sm">
         <h1 className="text-xl font-semibold text-foreground">
           Something went wrong
@@ -19,7 +19,7 @@ export default function Error({
         <button
           type="button"
           onClick={() => reset()}
-          className="text-sm px-3 py-1.5 rounded-lg border border-border hover:bg-black/5"
+          className="text-sm px-3 py-1.5 rounded-lg border border-border hover:bg-ink/5"
         >
           Try again
         </button>

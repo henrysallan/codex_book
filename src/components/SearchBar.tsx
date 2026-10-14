@@ -162,7 +162,7 @@ export function SearchBar() {
       >
         {showPanel && (
           <div
-            className={`absolute bottom-[calc(100%+8px)] left-0 right-0 bg-white rounded-xl border border-border shadow-lg overflow-hidden transition-[max-height] duration-200 ease-out ${
+            className={`absolute bottom-[calc(100%+8px)] left-0 right-0 bg-surface rounded-xl border border-border shadow-lg overflow-hidden transition-[max-height] duration-200 ease-out ${
               committed ? "max-h-[min(24rem,50vh)]" : "max-h-52"
             }`}
           >
@@ -189,7 +189,7 @@ export function SearchBar() {
                     key={item.id}
                     type="button"
                     className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
-                      i === selectedIndex ? "bg-neutral-100" : "hover:bg-neutral-50"
+                      i === selectedIndex ? "bg-ink/4" : "hover:bg-ink/2"
                     }`}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => openDoc(item.id)}
@@ -206,7 +206,7 @@ export function SearchBar() {
                     key={result.id}
                     type="button"
                     className={`w-full px-3 py-2 text-left transition-colors ${
-                      i === selectedIndex ? "bg-neutral-100" : "hover:bg-neutral-50"
+                      i === selectedIndex ? "bg-ink/4" : "hover:bg-ink/2"
                     }`}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => openDoc(result.id)}
@@ -237,10 +237,10 @@ export function SearchBar() {
         )}
 
         <div
-          className={`flex items-center gap-2 w-full rounded-full border bg-white transition-colors ${
+          className={`flex items-center gap-2 w-full rounded-full border bg-background transition-colors ${
             expanded
-              ? "px-4 py-1.5 border-black/20"
-              : "px-5 py-1.5 border-border hover:border-black/20 cursor-text"
+              ? "px-4 py-1.5 border-ink/20"
+              : "px-5 py-1.5 border-border hover:border-ink/20 cursor-text"
           }`}
           onClick={() => {
             if (!expanded) expand();
@@ -277,14 +277,14 @@ export function SearchBar() {
                   <X size={12} />
                 </button>
               )}
-              <kbd className="text-[10px] text-muted-foreground bg-neutral-100 px-1.5 py-0.5 rounded shrink-0">
+              <kbd className="text-[10px] text-muted-foreground bg-ink/4 px-1.5 py-0.5 rounded shrink-0">
                 ESC
               </kbd>
             </>
           ) : (
             <>
               <span className="text-xs text-foreground">search</span>
-              <kbd className="text-[10px] text-muted-foreground bg-neutral-100 px-1.5 py-0.5 rounded ml-1">
+              <kbd className="text-[10px] text-muted-foreground bg-ink/4 px-1.5 py-0.5 rounded ml-1">
                 ⌘⇧F
               </kbd>
             </>

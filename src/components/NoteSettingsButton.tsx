@@ -66,7 +66,7 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
       <button
         ref={btnRef}
         onClick={() => setOpen((o) => !o)}
-        className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-black/5 transition-colors pointer-events-auto"
+        className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-ink/5 transition-colors pointer-events-auto"
         title="Note settings"
         aria-label="Note settings"
       >
@@ -76,7 +76,7 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
       {open && (
         <div
           ref={panelRef}
-          className="absolute right-3 top-8 w-56 bg-white border border-border rounded-lg shadow-lg p-3 space-y-3 pointer-events-auto z-50"
+          className="absolute right-3 top-8 w-56 bg-surface border border-border rounded-lg shadow-lg p-3 space-y-3 pointer-events-auto z-50"
         >
           <h4 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
             Note Settings
@@ -90,7 +90,7 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
               value={font}
               onChange={(e) => onChange({ ...settings, font: e.target.value })}
               placeholder="Default"
-              className="w-full text-xs px-2 py-1.5 rounded-md border border-border bg-white outline-none focus:border-black/20 transition-colors"
+              className="w-full text-xs px-2 py-1.5 rounded-md border border-border bg-background outline-none focus:border-ink/20 transition-colors"
             />
           </div>
 
@@ -105,7 +105,7 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
                 type="button"
                 onClick={() => setFontSize(fontSize - 0.1)}
                 aria-label="Decrease font size"
-                className="shrink-0 p-1 rounded-md border border-border hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                className="shrink-0 p-1 rounded-md border border-border hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors"
               >
                 <Minus size={12} />
               </button>
@@ -121,7 +121,7 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
                 type="button"
                 onClick={() => setFontSize(fontSize + 0.1)}
                 aria-label="Increase font size"
-                className="shrink-0 p-1 rounded-md border border-border hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                className="shrink-0 p-1 rounded-md border border-border hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors"
               >
                 <Plus size={12} />
               </button>
@@ -137,11 +137,11 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
               aria-label={fullWidth ? "Use default width" : "Use full width"}
               aria-pressed={fullWidth}
               className={`relative w-8 h-[18px] rounded-full transition-colors ${
-                fullWidth ? "bg-foreground" : "bg-black/15"
+                fullWidth ? "bg-foreground" : "bg-ink/15"
               }`}
             >
               <span
-                className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-transform ${
+                className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-background shadow-sm transition-transform ${
                   fullWidth ? "left-[15px]" : "left-[2px]"
                 }`}
               />
@@ -170,11 +170,11 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
                       }
                     }}
                     className={`relative w-8 h-[18px] rounded-full transition-colors ${
-                      shareSlug ? "bg-foreground" : "bg-black/15"
+                      shareSlug ? "bg-foreground" : "bg-ink/15"
                     } ${shareLoading ? "opacity-50" : ""}`}
                   >
                     <span
-                      className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-transform ${
+                      className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-background shadow-sm transition-transform ${
                         shareSlug ? "left-[15px]" : "left-[2px]"
                       }`}
                     />
@@ -189,12 +189,12 @@ export function NoteSettingsButton({ settings, onChange, docId, shareSlug: initi
                       setCopied(true);
                       setTimeout(() => setCopied(false), 2000);
                     }}
-                    className="flex items-center gap-1.5 w-full text-xs px-2 py-1.5 rounded-md border border-border hover:bg-black/5 text-muted-foreground hover:text-foreground transition-colors"
+                    className="flex items-center gap-1.5 w-full text-xs px-2 py-1.5 rounded-md border border-border hover:bg-ink/5 text-muted-foreground hover:text-foreground transition-colors"
                   >
                     {copied ? (
                       <>
-                        <Check size={11} className="text-green-600" />
-                        <span className="text-green-600">Copied!</span>
+                        <Check size={11} className="text-green-600 dark:text-green-400" />
+                        <span className="text-green-600 dark:text-green-400">Copied!</span>
                       </>
                     ) : (
                       <>
