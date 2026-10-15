@@ -22,6 +22,8 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "public/**",
+    // The Expo app has its own toolchain (mobile/package.json).
+    "mobile/**",
     // Design docs; rendered HTML exports bundle minified third-party JS.
     "plan/**",
   ]),

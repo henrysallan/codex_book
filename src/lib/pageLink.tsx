@@ -2,6 +2,7 @@
 
 import { createReactInlineContentSpec } from "@blocknote/react";
 import { useAppStore } from "@/lib/store";
+import { pageLinkConfig } from "./editorSpecConfigs";
 
 // Custom inline content type for page links.
 // Renders as a clickable pill that navigates to the linked document.
@@ -40,16 +41,6 @@ export function PageLinkView(props: {
   );
 }
 
-export const PageLink = createReactInlineContentSpec(
-  {
-    type: "pageLink",
-    propSchema: {
-      docId: { default: "" },
-      docTitle: { default: "Untitled" },
-    },
-    content: "none",
-  },
-  {
-    render: PageLinkView,
-  }
-);
+export const PageLink = createReactInlineContentSpec(pageLinkConfig, {
+  render: PageLinkView,
+});

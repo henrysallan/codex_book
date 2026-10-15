@@ -3,16 +3,10 @@
 import { createReactBlockSpec } from "@blocknote/react";
 import { DatabaseTable } from "@/components/DatabaseTable";
 import { parseColumns, parseRows } from "./databaseTypes";
+import { databaseBlockConfig } from "./editorSpecConfigs";
 
 export const DatabaseBlock = createReactBlockSpec(
-    {
-      type: "database" as const,
-      propSchema: {
-        columns: { default: "[]" },
-        rows: { default: "[]" },
-      },
-      content: "none",
-    },
+    databaseBlockConfig,
     {
       render: (props) => {
         return (

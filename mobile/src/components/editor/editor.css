@@ -1,0 +1,114 @@
+/* Editor web view styles. Colors track the web app's globals.css. */
+
+:root {
+  --cx-bg: #ffffff;
+  --cx-fg: #171717;
+  --cx-muted: #737373;
+  --cx-border: #e5e5e5;
+  --cx-fill: rgba(0, 0, 0, 0.05);
+  --cx-fill-strong: rgba(0, 0, 0, 0.09);
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --cx-bg: #111111;
+  --cx-fg: #ededed;
+  --cx-muted: #a1a1a1;
+  --cx-border: #2b2b2b;
+  --cx-fill: rgba(255, 255, 255, 0.06);
+  --cx-fill-strong: rgba(255, 255, 255, 0.11);
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--cx-bg);
+  color: var(--cx-fg);
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Room below the last line so it can scroll above the keyboard/tab bar. */
+body {
+  padding: 4px 0 160px;
+}
+
+/* `[data-color-scheme]` matches BlockNote's own theme selector, which would
+   otherwise outrank these (same issue as the web app's globals.css). */
+.bn-container[data-color-scheme] {
+  --bn-colors-editor-background: var(--cx-bg);
+  --bn-colors-editor-text: var(--cx-fg);
+}
+
+:root[data-theme='dark'] .bn-container[data-color-scheme] {
+  --bn-colors-menu-background: #1c1c1c;
+  --bn-colors-menu-text: var(--cx-fg);
+  --bn-colors-border: var(--cx-border);
+  --bn-colors-hovered-background: #2a2a2a;
+  --bn-colors-selected-background: #3a3a3a;
+}
+
+/* The web layout's 54px gutter is for the drag handle, which mobile omits. */
+.bn-container .bn-editor {
+  padding-inline: 20px;
+}
+
+/* Side-by-side columns don't fit a phone; stack them. */
+.bn-block-column-list {
+  flex-direction: column !important;
+}
+.bn-block-column {
+  flex: none !important;
+  width: 100% !important;
+  padding: 0 !important;
+}
+
+.cx-page-link {
+  background: var(--cx-fill);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cx-db {
+  width: 100%;
+  border: 1px solid var(--cx-border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 4px 0;
+}
+.cx-db-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--cx-border);
+}
+.cx-db-row:first-child {
+  border-top: none;
+}
+.cx-db-row-link:active {
+  background: var(--cx-fill-strong);
+}
+.cx-db-chevron,
+.cx-db-empty {
+  color: var(--cx-muted);
+}
+.cx-db-empty {
+  padding: 11px 14px;
+}
+
+.cx-notice {
+  margin: 24px 20px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--cx-fill);
+  font: 15px/1.45 -apple-system, system-ui, sans-serif;
+}
+.cx-notice code {
+  font-size: 13px;
+}
