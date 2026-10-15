@@ -49,7 +49,7 @@ UI is a three-panel workspace: file tree (left) · block editor (center) · AI c
 | PDF | react-pdf / pdfjs |
 | Files | Google Drive API (read-only scope) |
 | Tables | TanStack Table (custom database block) |
-| DnD | dnd-kit (sidebar tree reordering) |
+| DnD | sidebar: custom pointer drag in FileTree.tsx; dnd-kit for database columns |
 
 **No Vercel AI SDK, no assistant-ui, no Yjs.** (`implementaiton.md` at the repo root is an early vision doc and is out of date on all three — trust this document and the code.)
 

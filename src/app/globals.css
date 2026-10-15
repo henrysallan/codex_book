@@ -227,6 +227,41 @@ body {
 .db-table td {
   overflow: visible;
 }
+/* The editor's grid is divs, not a <table> (see DatabaseTable.tsx). These
+   rules give it what a <table> inside the editor gets from prosemirror-tables'
+   `.ProseMirror table` / `td` defaults, so it lays out as before. The empty
+   state and footer are bottom captions, which span every column the way the
+   old colSpan cells did. */
+.db-grid {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  overflow: hidden;
+  border-top: 1px solid var(--db-border);
+}
+.db-thead {
+  display: table-header-group;
+}
+.db-tbody {
+  display: table-row-group;
+}
+.db-tr {
+  display: table-row;
+}
+.db-grid .db-th,
+.db-grid .db-td {
+  display: table-cell;
+  vertical-align: top;
+}
+.db-empty,
+.db-footer {
+  display: table-caption;
+  caption-side: bottom;
+  border-bottom: 1px solid var(--db-border);
+  padding: 0.5rem;
+  color: var(--db-text);
+}
 .db-th,
 .db-td {
   border-bottom: 1px solid var(--db-border);
@@ -483,49 +518,91 @@ body {
   background: rgba(59, 130, 246, 0.3);
 }
 
-/* Sidebar tree: add = open gap then fade in; remove = fade out, hold gap, then collapse */
-.tree-anim {
-  display: grid;
-  grid-template-rows: 1fr;
-  transition: grid-template-rows 220ms cubic-bezier(0.25, 0.1, 0.25, 1);
+/* ─── Sidebar file tree (FileTree.tsx) ───
+   Rows are absolutely positioned at index × row height, so inserting, removing
+   or expanding only changes transforms: rows slide on the compositor and newly
+   visible rows fade in. Nothing animates height or triggers layout. */
+.ft-row {
+  transition: transform 160ms cubic-bezier(0.2, 0, 0, 1);
 }
-.tree-anim[data-phase="enter"],
-.tree-anim[data-phase="exit-collapse"] {
-  grid-template-rows: 0fr;
+.ft-row[data-enter] {
+  animation: ft-fade 180ms ease-out both;
 }
-.tree-anim-clip {
-  min-height: 0;
-  overflow: visible;
+
+/* Indent guides show while the tree is hovered or keyboard-focused. */
+.ft-guide {
+  opacity: 0;
+  transition: opacity 150ms ease;
 }
-.tree-anim[data-phase="enter"] .tree-anim-clip,
-.tree-anim[data-phase="enter-open"] .tree-anim-clip,
-.tree-anim[data-phase="exit-collapse"] .tree-anim-clip {
-  overflow: hidden;
-}
-.tree-anim-inner {
+.ft-tree:hover .ft-guide,
+.ft-tree:focus-visible .ft-guide {
   opacity: 1;
-  transition: opacity 180ms ease;
 }
-.tree-anim[data-phase="enter"] .tree-anim-inner,
-.tree-anim[data-phase="enter-open"] .tree-anim-inner {
-  opacity: 0;
+
+/* Drag and drop: the drop target row plus a tint over its visible subtree. */
+.ft-row[data-drop="target"] > .ft-row-inner {
+  background-color: color-mix(in srgb, var(--ink) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 40%, transparent);
 }
-.tree-anim[data-phase="exit-fade"] .tree-anim-inner,
-.tree-anim[data-phase="exit-hold"] .tree-anim-inner,
-.tree-anim[data-phase="exit-collapse"] .tree-anim-inner {
-  opacity: 0;
-  pointer-events: none;
+.ft-row[data-drop="region"] > .ft-row-inner {
+  background-color: color-mix(in srgb, var(--ink) 4%, transparent);
 }
-.tree-anim[data-phase="enter"] .tree-anim-inner,
-.tree-anim[data-phase="enter-open"] .tree-anim-inner {
-  pointer-events: none;
+.ft-tree-dragging .ft-row:not([data-drop]) > .ft-row-inner:hover {
+  background-color: transparent;
+}
+.ft-tree-dragging .ft-row-actions {
+  visibility: hidden;
+}
+html.ft-dragging,
+html.ft-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+/* Confirms where a created / moved item landed. */
+.ft-flash {
+  animation: ft-flash 900ms ease-out;
+}
+
+.ft-menu {
+  animation: ft-pop 110ms cubic-bezier(0.2, 0, 0, 1);
+  transform-origin: top left;
+}
+.ft-fade-in {
+  animation: ft-fade 140ms ease-out;
+}
+.ft-pop-in {
+  animation: ft-pop 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+/* Loading placeholders that should stay invisible for quick loads. */
+.ft-delayed-in {
+  animation: ft-fade 150ms ease-out 250ms both;
+}
+
+@keyframes ft-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ft-pop {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ft-flash {
+  0%, 35% { background-color: rgba(59, 130, 246, 0.22); }
+  100% { background-color: transparent; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tree-anim {
+  .ft-row,
+  .ft-guide {
     transition: none;
   }
-  .tree-anim-inner {
-    transition: none;
+  .ft-row[data-enter],
+  .ft-flash,
+  .ft-menu,
+  .ft-fade-in,
+  .ft-pop-in,
+  .ft-delayed-in {
+    animation: none;
   }
 }

@@ -1,8 +1,6 @@
 import { create } from "zustand";
 import {
   Document,
-  DocumentMeta,
-  Folder,
   OpenTab,
   ChatMessage,
   ContextItem,
@@ -29,8 +27,6 @@ import {
   setParentDocument as dbSetParentDocument,
   propagatePageLinkTitle,
   propagateDatabaseRowTitle,
-  buildFolderTree,
-  getRootDocuments,
   dbDocumentToDocument,
   createAnnotation as dbCreateAnnotation,
   fetchAnnotations as dbFetchAnnotations,
@@ -84,6 +80,47 @@ let lastFileActionAt = 0;
 const FILE_UNDO_PRIORITY_MS = 15_000;
 
 let dashboardInitInflight: Promise<void> | null = null;
+/** Expanded folders / pages are read from localStorage once; after that memory is the truth. */
+let expandedStateLoaded = false;
+
+// ─── Optimistic creates & prefetch ───
+
+/**
+ * Inserts still in flight for documents that are already open. Every write to
+ * such a document waits for its insert, so the editor can open instantly.
+ */
+const pendingCreates = new Map<string, Promise<void>>();
+
+function afterCreate(id: string): Promise<void> {
+  return pendingCreates.get(id) ?? Promise.resolve();
+}
+
+/** Full documents fetched ahead of a click (hover / pointerdown / keyboard). */
+const PREFETCH_TTL_MS = 60_000;
+const prefetched = new Map<string, { doc: Document; at: number }>();
+const prefetchInflight = new Map<string, Promise<Document | null>>();
+
+function fetchDocumentShared(id: string): Promise<Document | null> {
+  const inflight = prefetchInflight.get(id);
+  if (inflight) return inflight;
+  const p = fetchDocument(id)
+    .then((row) => {
+      if (!row) return null;
+      const doc = dbDocumentToDocument(row);
+      prefetched.set(id, { doc, at: Date.now() });
+      return doc;
+    })
+    .finally(() => prefetchInflight.delete(id));
+  prefetchInflight.set(id, p);
+  return p;
+}
+
+function takePrefetched(id: string): Document | null {
+  const hit = prefetched.get(id);
+  if (!hit) return null;
+  prefetched.delete(id);
+  return Date.now() - hit.at < PREFETCH_TTL_MS ? hit.doc : null;
+}
 
 export function shouldHandleFileUndo(kind: "undo" | "redo", inEditor: boolean) {
   const stack = kind === "undo" ? undoStack : redoStack;
@@ -113,6 +150,27 @@ function recordMove(step: MoveStep) {
   lastFileActionAt = Date.now();
 }
 
+type DocPlacement = { folder_id: string | null; parent_document_id: string | null };
+
+function patchDocLocation(docId: string, to: DocPlacement) {
+  const { _dbDocuments } = useAppStore.getState();
+  useAppStore.setState({
+    _dbDocuments: _dbDocuments.map((d) => (d.id === docId ? { ...d, ...to } : d)),
+  });
+}
+
+/** Roll back one failed move, unless something has moved the doc since. */
+function revertDocLocation(docId: string, prev: DocPlacement, to: DocPlacement) {
+  const { _dbDocuments } = useAppStore.getState();
+  useAppStore.setState({
+    _dbDocuments: _dbDocuments.map((d) =>
+      d.id === docId && d.folder_id === to.folder_id && d.parent_document_id === to.parent_document_id
+        ? { ...d, folder_id: prev.folder_id, parent_document_id: prev.parent_document_id }
+        : d
+    ),
+  });
+}
+
 // ─── LocalStorage Cache Helpers ───
 
 const CACHE_KEYS = {
@@ -121,6 +179,7 @@ const CACHE_KEYS = {
   OPEN_TABS: "cortex:cache:openTabs",
   ACTIVE_DOC_ID: "cortex:cache:activeDocumentId",
   EXPANDED_FOLDERS: "cortex:cache:expandedFolderIds",
+  EXPANDED_DOCS: "cortex:cache:expandedDocIds",
   TIMESTAMP: "cortex:cache:timestamp",
 } as const;
 
@@ -164,11 +223,18 @@ function persistSidebarCache(state: {
 function persistWorkspaceState(state: {
   openTabs: OpenTab[];
   activeDocumentId: string | null;
-  expandedFolderIds: Set<string>;
 }): void {
   cacheWrite(CACHE_KEYS.OPEN_TABS, state.openTabs);
   cacheWrite(CACHE_KEYS.ACTIVE_DOC_ID, state.activeDocumentId);
+}
+
+/** Persist which folders and parent documents are expanded in the sidebar. */
+function persistExpandedState(state: {
+  expandedFolderIds: Set<string>;
+  expandedDocIds: Set<string>;
+}): void {
   cacheWrite(CACHE_KEYS.EXPANDED_FOLDERS, [...state.expandedFolderIds]);
+  cacheWrite(CACHE_KEYS.EXPANDED_DOCS, [...state.expandedDocIds]);
 }
 
 /** Load cached sidebar data. Returns null if no cache or cache is too old. */
@@ -192,24 +258,28 @@ function loadSidebarCache(): {
 function loadWorkspaceState(): {
   openTabs: OpenTab[];
   activeDocumentId: string | null;
-  expandedFolderIds: Set<string>;
 } | null {
   const openTabs = cacheRead<OpenTab[]>(CACHE_KEYS.OPEN_TABS);
   const activeDocumentId = cacheRead<string | null>(CACHE_KEYS.ACTIVE_DOC_ID);
-  const expandedArr = cacheRead<string[]>(CACHE_KEYS.EXPANDED_FOLDERS);
   if (!openTabs) return null;
+  return { openTabs, activeDocumentId: activeDocumentId ?? null };
+}
+
+function loadExpandedState(): {
+  expandedFolderIds: Set<string>;
+  expandedDocIds: Set<string>;
+} {
   return {
-    openTabs,
-    activeDocumentId: activeDocumentId ?? null,
-    expandedFolderIds: new Set(expandedArr ?? []),
+    expandedFolderIds: new Set(cacheRead<string[]>(CACHE_KEYS.EXPANDED_FOLDERS) ?? []),
+    expandedDocIds: new Set(cacheRead<string[]>(CACHE_KEYS.EXPANDED_DOCS) ?? []),
   };
 }
 
 interface AppState {
   // Data
-  folders: Folder[];
-  rootDocuments: DocumentMeta[];
   expandedFolderIds: Set<string>;
+  /** Parent documents whose sub-pages are shown in the sidebar. */
+  expandedDocIds: Set<string>;
   openTabs: OpenTab[];
   activeDocumentId: string | null;
   activeDocument: Document | null;
@@ -230,25 +300,37 @@ interface AppState {
   _documentCache: Map<string, Document>;
   _annotationsCache: Map<string, Annotation[]>;
 
-  // Raw db data for rebuilding tree
-  _dbFolders: DbFolder[];  
+  // Raw db rows — the sidebar derives its tree from these (see lib/fileTree.ts)
+  _dbFolders: DbFolder[];
   _dbDocuments: DbDocument[];
 
   // Actions
   initialize: () => Promise<void>;
+  /** Legacy hook kept for callers that patch `_dbDocuments` directly; the sidebar re-derives on its own. */
   _rebuildTree: () => void;
   goBack: () => Promise<void>;
   goForward: () => Promise<void>;
   canGoBack: () => boolean;
   canGoForward: () => boolean;
   toggleFolder: (folderId: string) => void;
+  toggleDocExpanded: (docId: string) => void;
+  /** Expand or collapse many folders / parent docs in one update. */
+  setTreeExpanded: (ids: { folderIds?: string[]; docIds?: string[] }, expanded: boolean) => void;
   openDocument: (docId: string) => Promise<void>;
+  /** Warm the document cache ahead of a likely open (hover, pointerdown, keyboard). */
+  prefetchDocument: (docId: string) => void;
   closeTab: (docId: string) => void;
   setActiveTab: (docId: string) => Promise<void>;
-  createFolder: (name: string, parentId?: string | null) => Promise<void>;
+  /** Returns the new folder's id immediately; the insert finishes in the background. */
+  createFolder: (name: string, parentId?: string | null) => string;
   renameFolder: (id: string, name: string) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
-  createDocument: (folderId?: string | null, docType?: import("./types").DocType) => Promise<string>;
+  createDocument: (
+    folderId?: string | null,
+    docType?: import("./types").DocType,
+    /** `exactFolder`: a null folder means the top level, not the open page's folder. */
+    opts?: { parentDocumentId?: string | null; exactFolder?: boolean }
+  ) => Promise<string>;
   saveDocument: (
     id: string,
     updates: Partial<{
@@ -306,9 +388,8 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-  folders: [],
-  rootDocuments: [],
   expandedFolderIds: new Set<string>(),
+  expandedDocIds: new Set<string>(),
   openTabs: [],
   activeDocumentId: null,
   activeDocument: null,
@@ -337,15 +418,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   quickNotes: [],
   dashboardReady: false,
 
-  /** Rebuild sidebar tree from in-memory _dbFolders / _dbDocuments and persist cache.
-   *  Use this after local mutations instead of initialize() to avoid a full DB re-fetch. */
-  _rebuildTree: () => {
-    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
-    const folders = buildFolderTree(_dbFolders, _dbDocuments, expandedFolderIds);
-    const rootDocs = getRootDocuments(_dbDocuments, _dbFolders);
-    set({ folders, rootDocuments: rootDocs });
-    persistSidebarCache({ _dbFolders, _dbDocuments });
-  },
+  /** The sidebar derives its tree from `_dbFolders` / `_dbDocuments` and the cache
+   *  persister watches them, so there is nothing to rebuild. Kept so existing
+   *  callers (`setState({ _dbDocuments })` then `_rebuildTree()`) keep working. */
+  _rebuildTree: () => {},
 
   canGoBack: () => get().navIndex > 0,
   canGoForward: () => get().navIndex < get().navHistory.length - 1,
@@ -371,20 +447,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   initialize: async () => {
     try {
       // ── Phase 1: Instant restore from localStorage cache ──
+      // A re-run (e.g. after the chat creates a note) must not read back state
+      // older than what is in memory, so write out anything still pending first.
+      flushPersist();
       const cached = loadSidebarCache();
       const workspace = loadWorkspaceState();
+      if (!expandedStateLoaded) {
+        expandedStateLoaded = true;
+        set(loadExpandedState());
+      }
 
       if (cached) {
-        const expandedIds = workspace?.expandedFolderIds ?? get().expandedFolderIds;
-        const folders = buildFolderTree(cached.dbFolders, cached.dbDocuments, expandedIds);
-        const rootDocs = getRootDocuments(cached.dbDocuments, cached.dbFolders);
-
         set({
           _dbFolders: cached.dbFolders,
           _dbDocuments: cached.dbDocuments,
-          folders,
-          rootDocuments: rootDocs,
-          expandedFolderIds: expandedIds,
           isLoading: false,
           // Restore open tabs + active doc from cache
           ...(workspace ? {
@@ -417,25 +493,25 @@ export const useAppStore = create<AppState>((set, get) => ({
         fetchDocuments(),
       ]);
 
-      const expandedIds = get().expandedFolderIds;
-      const folders = buildFolderTree(dbFolders, dbDocuments, expandedIds);
-      const rootDocs = getRootDocuments(dbDocuments, dbFolders);
+      // Keep rows created optimistically while the fetch was in flight.
+      const fetchedIds = new Set([...dbDocuments, ...dbFolders].map((r) => r.id));
+      const pendingDocs = get()._dbDocuments.filter(
+        (d) => pendingCreates.has(d.id) && !fetchedIds.has(d.id)
+      );
+      const pendingFolders = get()._dbFolders.filter(
+        (f) => pendingCreates.has(f.id) && !fetchedIds.has(f.id)
+      );
 
       set({
-        _dbFolders: dbFolders,
-        _dbDocuments: dbDocuments,
-        folders,
-        rootDocuments: rootDocs,
+        _dbFolders: pendingFolders.length ? [...dbFolders, ...pendingFolders] : dbFolders,
+        _dbDocuments: pendingDocs.length ? [...dbDocuments, ...pendingDocs] : dbDocuments,
         isLoading: false,
       });
-
-      // Update the sidebar cache with fresh data
-      persistSidebarCache({ _dbFolders: dbFolders, _dbDocuments: dbDocuments });
 
       // If tabs were restored from cache, validate they still exist
       const { openTabs } = get();
       if (openTabs.length > 0) {
-        const docIds = new Set(dbDocuments.map((d) => d.id));
+        const docIds = new Set(get()._dbDocuments.map((d) => d.id));
         const validTabs = openTabs.filter(
           (t) => t.driveFile || docIds.has(t.documentId)
         );
@@ -459,20 +535,44 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   toggleFolder: (folderId: string) => {
-    const { expandedFolderIds, _dbFolders, _dbDocuments } = get();
-    const newExpanded = new Set(expandedFolderIds);
-    if (newExpanded.has(folderId)) {
-      newExpanded.delete(folderId);
-    } else {
-      newExpanded.add(folderId);
-    }
-    const folders = buildFolderTree(_dbFolders, _dbDocuments, newExpanded);
-    const rootDocs = getRootDocuments(_dbDocuments, _dbFolders);
-    set({
-      expandedFolderIds: newExpanded,
-      folders,
-      rootDocuments: rootDocs,
-    });
+    const next = new Set(get().expandedFolderIds);
+    if (!next.delete(folderId)) next.add(folderId);
+    set({ expandedFolderIds: next });
+  },
+
+  toggleDocExpanded: (docId: string) => {
+    const next = new Set(get().expandedDocIds);
+    if (!next.delete(docId)) next.add(docId);
+    set({ expandedDocIds: next });
+  },
+
+  setTreeExpanded: ({ folderIds = [], docIds = [] }, expanded) => {
+    const apply = (current: Set<string>, ids: string[]) => {
+      if (ids.length === 0) return current;
+      const next = new Set(current);
+      let changed = false;
+      for (const id of ids) {
+        if (expanded ? !next.has(id) : next.has(id)) {
+          if (expanded) next.add(id);
+          else next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    };
+    const { expandedFolderIds, expandedDocIds } = get();
+    const nextFolders = apply(expandedFolderIds, folderIds);
+    const nextDocs = apply(expandedDocIds, docIds);
+    if (nextFolders === expandedFolderIds && nextDocs === expandedDocIds) return;
+    set({ expandedFolderIds: nextFolders, expandedDocIds: nextDocs });
+  },
+
+  prefetchDocument: (docId: string) => {
+    if (docId.startsWith("drive:")) return;
+    if (get()._documentCache.has(docId) || pendingCreates.has(docId)) return;
+    const hit = prefetched.get(docId);
+    if (hit && Date.now() - hit.at < PREFETCH_TTL_MS / 2) return;
+    void fetchDocumentShared(docId).catch(() => {});
   },
 
   openDocument: async (docId: string) => {
@@ -487,21 +587,50 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     if (!existing) {
-      const dbDoc = await fetchDocument(docId);
-      if (!dbDoc) return;
-
-      const doc = dbDocumentToDocument(dbDoc);
-      // Cache the document
+      // Open the tab and move the selection now; the content follows. A
+      // prefetched copy renders instantly and is revalidated in the background,
+      // the same way setActiveTab treats its cache.
+      const fetchGen = nextDocumentFetchGen(docId);
+      const meta = get()._dbDocuments.find((d) => d.id === docId);
+      const warm = get()._documentCache.get(docId) ?? takePrefetched(docId);
       const cache = new Map(get()._documentCache);
-      cache.set(doc.id, doc);
+      if (warm) cache.set(docId, warm);
       set({
-        openTabs: [...openTabs, { documentId: doc.id, title: doc.title }],
-        activeDocumentId: doc.id,
-        activeDocument: doc,
+        openTabs: [...get().openTabs, { documentId: docId, title: warm?.title ?? meta?.title ?? "Untitled" }],
+        activeDocumentId: docId,
+        activeDocument: warm ?? null,
         activeAnnotation: null,
         _documentCache: cache,
+        ...(get()._annotationsCache.get(docId)
+          ? { documentAnnotations: get()._annotationsCache.get(docId)! }
+          : {}),
       });
-      await get().loadAnnotations(doc.id);
+      void get().loadAnnotations(docId);
+      if (pendingCreates.has(docId)) return;
+
+      let fresh: Document | null;
+      try {
+        fresh = await fetchDocumentShared(docId);
+      } catch (err) {
+        console.error("Failed to open document:", err);
+        fresh = null;
+        if (warm) return;
+      }
+      if (documentFetchGen.get(docId) !== fetchGen) return;
+      if (!fresh) {
+        // Gone (deleted elsewhere) — drop the tab we just opened.
+        if (get().openTabs.some((t) => t.documentId === docId)) get().closeTab(docId);
+        return;
+      }
+      prefetched.delete(docId);
+      const current = get()._documentCache.get(docId);
+      if (current && isNewerTimestamp(current.updatedAt, fresh.updatedAt)) return;
+      const next = new Map(get()._documentCache);
+      next.set(docId, fresh);
+      set({
+        _documentCache: next,
+        ...(get().activeDocumentId === docId ? { activeDocument: fresh } : {}),
+      });
     } else {
       // Skip the history push inside setActiveTab since we already pushed above
       set({ _isNavigating: true });
@@ -608,8 +737,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().loadAnnotations(doc.id);
   },
 
-  createFolder: async (name: string, parentId: string | null = null) => {
-    // Optimistic: inject folder into local state immediately
+  createFolder: (name: string, parentId: string | null = null) => {
+    // Optimistic: the local row already carries the id the insert will use,
+    // so nothing has to be swapped when the server answers.
     const now = new Date().toISOString();
     const tempFolder: DbFolder = {
       id: uuidv4(),
@@ -621,30 +751,46 @@ export const useAppStore = create<AppState>((set, get) => ({
       created_at: now,
       updated_at: now,
     };
-    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
-    const newFolders = [..._dbFolders, tempFolder];
-    set({
-      _dbFolders: newFolders,
-      folders: buildFolderTree(newFolders, _dbDocuments, expandedFolderIds),
-    });
-    // Persist in background then reconcile with real data
-    dbCreateFolder(name, parentId).then((realFolder) => {
-      const folders = get()._dbFolders.map((f) => f.id === tempFolder.id ? realFolder : f);
-      set({ _dbFolders: folders });
-      get()._rebuildTree();
-    }).catch(console.error);
+    const expanded =
+      parentId && !get().expandedFolderIds.has(parentId)
+        ? { expandedFolderIds: new Set(get().expandedFolderIds).add(parentId) }
+        : {};
+    set({ _dbFolders: [...get()._dbFolders, tempFolder], ...expanded });
+    const insert = dbCreateFolder(name, parentId, tempFolder.id).then(
+      (realFolder) => {
+        // Keep anything the user changed locally while the insert was in flight.
+        set({
+          _dbFolders: get()._dbFolders.map((f) =>
+            f.id === tempFolder.id
+              ? { ...realFolder, name: f.name, parent_id: f.parent_id, parent_document_id: f.parent_document_id }
+              : f
+          ),
+        });
+      },
+      (err) => {
+        console.error("Failed to create folder:", err);
+        set({ _dbFolders: get()._dbFolders.filter((f) => f.id !== tempFolder.id) });
+        throw err;
+      }
+    );
+    pendingCreates.set(tempFolder.id, insert);
+    insert.then(
+      () => pendingCreates.delete(tempFolder.id),
+      () => pendingCreates.delete(tempFolder.id)
+    );
+    return tempFolder.id;
   },
 
   renameFolder: async (id: string, name: string) => {
     const { _dbFolders } = get();
     const prev = _dbFolders;
     set({ _dbFolders: _dbFolders.map((f) => f.id === id ? { ...f, name, updated_at: new Date().toISOString() } : f) });
-    get()._rebuildTree();
-    dbRenameFolder(id, name).catch((err) => {
-      console.error("Failed to rename folder:", err);
-      set({ _dbFolders: prev });
-      get()._rebuildTree();
-    });
+    afterCreate(id)
+      .then(() => dbRenameFolder(id, name))
+      .catch((err) => {
+        console.error("Failed to rename folder:", err);
+        set({ _dbFolders: prev });
+      });
   },
 
   deleteFolder: async (id: string) => {
@@ -661,39 +807,47 @@ export const useAppStore = create<AppState>((set, get) => ({
         d.folder_id === id ? { ...d, folder_id: null } : d
       ),
     });
-    get()._rebuildTree();
-    dbDeleteFolder(id).catch((err) => {
-      console.error("Failed to delete folder:", err);
-      set({ _dbFolders: snapshotFolders, _dbDocuments: snapshotDocs });
-      get()._rebuildTree();
-    });
+    afterCreate(id)
+      .then(() => dbDeleteFolder(id))
+      .catch((err) => {
+        console.error("Failed to delete folder:", err);
+        set({ _dbFolders: snapshotFolders, _dbDocuments: snapshotDocs });
+      });
   },
 
-  createDocument: async (folderId: string | null = null, docType: import("./types").DocType = "note") => {
+  createDocument: async (
+    folderId: string | null = null,
+    docType: import("./types").DocType = "note",
+    opts?: { parentDocumentId?: string | null; exactFolder?: boolean }
+  ) => {
     const state = get();
-    let targetFolderId = folderId;
-    if (targetFolderId === null) {
+    const parentDocumentId = opts?.parentDocumentId ?? null;
+    const parentDoc = parentDocumentId
+      ? state._dbDocuments.find((d) => d.id === parentDocumentId) ?? null
+      : null;
+    let targetFolderId = parentDoc ? parentDoc.folder_id : folderId;
+    if (targetFolderId === null && !parentDoc && !opts?.exactFolder) {
       targetFolderId =
         state.activeDocument?.folderId ??
         state._dbDocuments.find((d) => d.id === state.activeDocumentId)?.folder_id ??
         null;
     }
 
-    if (targetFolderId && !state.expandedFolderIds.has(targetFolderId)) {
-      const expandedFolderIds = new Set(state.expandedFolderIds);
-      expandedFolderIds.add(targetFolderId);
-      set({ expandedFolderIds });
-    }
+    // Reveal where the new page lands.
+    const expandFolder = targetFolderId && !state.expandedFolderIds.has(targetFolderId);
+    const expandParent = parentDocumentId && !state.expandedDocIds.has(parentDocumentId);
 
-    // Optimistic: inject doc into local state immediately
+    // Optimistic: the local row carries the id the insert will use, and the
+    // editor opens on it right away. Writes to it wait for the insert
+    // (`afterCreate`), so typing never races the row into existence.
     const now = new Date().toISOString();
-    const tempId = uuidv4();
+    const title = docType === "moodboard" ? "Untitled Moodboard" : "Untitled";
     const tempDoc: DbDocument = {
-      id: tempId,
-      title: docType === "moodboard" ? "Untitled Moodboard" : "Untitled",
+      id: uuidv4(),
+      title,
       subtitle: null,
       folder_id: targetFolderId,
-      parent_document_id: null,
+      parent_document_id: parentDocumentId,
       user_id: "local",
       content: "[]",
       tags: [],
@@ -704,48 +858,114 @@ export const useAppStore = create<AppState>((set, get) => ({
       created_at: now,
       updated_at: now,
     };
-    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
-    const newDocs = [..._dbDocuments, tempDoc];
+    const id = tempDoc.id;
     set({
-      _dbDocuments: newDocs,
-      folders: buildFolderTree(_dbFolders, newDocs, expandedFolderIds),
-      rootDocuments: getRootDocuments(newDocs, _dbFolders),
+      _dbDocuments: [...get()._dbDocuments, tempDoc],
+      ...(expandFolder ? { expandedFolderIds: new Set(get().expandedFolderIds).add(targetFolderId!) } : {}),
+      ...(expandParent ? { expandedDocIds: new Set(get().expandedDocIds).add(parentDocumentId!) } : {}),
     });
-    // Persist and open — must await so we return the real id
-    const title = docType === "moodboard" ? "Untitled Moodboard" : "Untitled";
-    const dbDoc = await dbCreateDocument(targetFolderId, title, "[]", null, docType);
-    // If it's a moodboard, create the companion moodboard_state row
-    if (docType === "moodboard") {
-      try {
-        await dbCreateMoodboardState(dbDoc.id);
-      } catch (err) {
-        console.error("Failed to create moodboard state:", err);
+
+    const insert = (async () => {
+      const dbDoc = await dbCreateDocument(targetFolderId, title, "[]", parentDocumentId, docType, [], id);
+      // A moodboard needs its companion state row before the canvas loads.
+      if (docType === "moodboard") {
+        try {
+          await dbCreateMoodboardState(dbDoc.id);
+        } catch (err) {
+          console.error("Failed to create moodboard state:", err);
+        }
       }
-    }
-    // Reconcile: swap temp doc for the real one
-    const reconciledDocs = get()._dbDocuments.map((d) => (d.id === tempId ? dbDoc : d));
+      // Reconcile server fields, keeping local edits to title / placement, and
+      // hand the open editor the server's timestamp so its first save matches.
+      const stamp = { createdAt: dbDoc.created_at, updatedAt: dbDoc.updated_at };
+      const cache = new Map(get()._documentCache);
+      const cached = cache.get(id);
+      if (cached) cache.set(id, { ...cached, ...stamp });
+      const active = get().activeDocument;
+      set({
+        _dbDocuments: get()._dbDocuments.map((d) =>
+          d.id === id
+            ? { ...d, created_at: dbDoc.created_at, updated_at: dbDoc.updated_at, user_id: dbDoc.user_id }
+            : d
+        ),
+        _documentCache: cache,
+        ...(active?.id === id ? { activeDocument: { ...active, ...stamp } } : {}),
+      });
+    })();
+    pendingCreates.set(id, insert);
+    insert.then(
+      () => pendingCreates.delete(id),
+      (err) => {
+        pendingCreates.delete(id);
+        console.error("Failed to create document:", err);
+        set({ _dbDocuments: get()._dbDocuments.filter((d) => d.id !== id) });
+        if (get().openTabs.some((t) => t.documentId === id)) get().closeTab(id);
+      }
+    );
+
+    // The moodboard canvas reads its state row on mount, so wait for it.
+    if (docType === "moodboard") await insert;
+
+    const doc = dbDocumentToDocument(get()._dbDocuments.find((d) => d.id === id) ?? tempDoc);
+    const { _isNavigating, navHistory, navIndex } = get();
+    const cache = new Map(get()._documentCache);
+    cache.set(id, doc);
     set({
-      _dbDocuments: reconciledDocs,
-      folders: buildFolderTree(get()._dbFolders, reconciledDocs, get().expandedFolderIds),
-      rootDocuments: getRootDocuments(reconciledDocs, get()._dbFolders),
+      isGraphOpen: false,
+      openTabs: [...get().openTabs, { documentId: id, title }],
+      activeDocumentId: id,
+      activeDocument: doc,
+      activeAnnotation: null,
+      documentAnnotations: [],
+      _documentCache: cache,
+      ...(_isNavigating
+        ? {}
+        : { navHistory: [...navHistory.slice(0, navIndex + 1), id], navIndex: navIndex + 1 }),
     });
-    await get().openDocument(dbDoc.id);
-    return dbDoc.id;
+    return id;
   },
 
   saveDocument: async (id, updates) => {
     const { expectedUpdatedAt, ...fields } = updates;
-    // Throws StaleWriteError when expectedUpdatedAt no longer matches the row.
-    const saved = await dbUpdateDocument(
-      id,
-      fields,
-      expectedUpdatedAt ? { expectedUpdatedAt } : undefined
-    );
+
+    // Show a new title in the sidebar and tab bar immediately; revert only if
+    // the write fails outright (a stale write is retried or held by the editor).
+    const prevTitle =
+      fields.title !== undefined
+        ? get()._dbDocuments.find((d) => d.id === id)?.title
+        : undefined;
+    const applyTitle = (title: string) =>
+      set({
+        _dbDocuments: get()._dbDocuments.map((d) => (d.id === id ? { ...d, title } : d)),
+        openTabs: get().openTabs.map((t) => (t.documentId === id ? { ...t, title } : t)),
+      });
+    if (fields.title && fields.title !== prevTitle) applyTitle(fields.title);
+
+    let saved: DbDocument;
+    try {
+      await afterCreate(id);
+      // Throws StaleWriteError when expectedUpdatedAt no longer matches the row.
+      saved = await dbUpdateDocument(
+        id,
+        fields,
+        expectedUpdatedAt ? { expectedUpdatedAt } : undefined
+      );
+    } catch (err) {
+      if (
+        fields.title &&
+        prevTitle !== undefined &&
+        !(err instanceof StaleWriteError) &&
+        get()._dbDocuments.find((d) => d.id === id)?.title === fields.title
+      ) {
+        applyTitle(prevTitle);
+      }
+      throw err;
+    }
 
     const mapped = dbDocumentToDocument(saved);
 
     // Update active document and cache
-    const { activeDocument, openTabs, _documentCache } = get();
+    const { activeDocument, _documentCache } = get();
     if (activeDocument && activeDocument.id === id) {
       const updated = { ...activeDocument, ...fields, updatedAt: mapped.updatedAt };
       if (fields.content !== undefined) updated.content = mapped.content;
@@ -761,33 +981,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       set({ _documentCache: cache });
     }
+    prefetched.delete(id);
 
-    // Update tab title if title changed
-    if (updates.title) {
-      set({
-        openTabs: openTabs.map((t) =>
-          t.documentId === id ? { ...t, title: updates.title! } : t
-        ),
-      });
-
-      // Propagate the new title to all pageLink nodes referencing this doc
-      try {
-        await propagatePageLinkTitle(id, updates.title);
-      } catch (err) {
-        console.error("Failed to propagate page link title:", err);
-      }
-
-      // Propagate the new title to any database row that links to this doc
-      try {
-        await propagateDatabaseRowTitle(id, updates.title);
-      } catch (err) {
-        console.error("Failed to propagate database row title:", err);
-      }
-
-      // Update title in _dbDocuments and rebuild tree (no DB re-fetch)
-      const { _dbDocuments: docs } = get();
-      set({ _dbDocuments: docs.map((d) => d.id === id ? { ...d, title: updates.title! } : d) });
-      get()._rebuildTree();
+    if (fields.title) {
+      const title = fields.title;
+      // Rewrite page-link pills and database rows that show this title. These
+      // touch other documents, so they run after the save instead of holding it.
+      void (async () => {
+        try {
+          await propagatePageLinkTitle(id, title);
+        } catch (err) {
+          console.error("Failed to propagate page link title:", err);
+        }
+        try {
+          await propagateDatabaseRowTitle(id, title);
+        } catch (err) {
+          console.error("Failed to propagate database row title:", err);
+        }
+      })();
     }
 
     return mapped;
@@ -801,11 +1012,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const collect = (docId: string) => {
       idsToDelete.add(docId);
       for (const d of docs) {
-        if (d.parent_document_id === docId) collect(d.id);
+        if (d.parent_document_id === docId && !idsToDelete.has(d.id)) collect(d.id);
       }
     };
     collect(id);
-    for (const docId of idsToDelete) get().closeTab(docId);
+    for (const docId of idsToDelete) {
+      if (get().openTabs.some((t) => t.documentId === docId)) get().closeTab(docId);
+      prefetched.delete(docId);
+    }
     set({
       _dbDocuments: docs.filter((d) => !idsToDelete.has(d.id)),
       _dbFolders: folders.map((f) =>
@@ -814,44 +1028,36 @@ export const useAppStore = create<AppState>((set, get) => ({
           : f
       ),
     });
-    get()._rebuildTree();
-    dbDeleteDocument(id).catch((err) => {
-      console.error("Failed to delete document:", err);
-      set({ _dbDocuments: snapshotDocs, _dbFolders: snapshotFolders });
-      get()._rebuildTree();
-    });
+    afterCreate(id)
+      .then(() => dbDeleteDocument(id))
+      .catch((err) => {
+        console.error("Failed to delete document:", err);
+        set({ _dbDocuments: snapshotDocs, _dbFolders: snapshotFolders });
+      });
   },
 
   moveDocument: async (docId: string, folderId: string | null) => {
-    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
-    const prev = _dbDocuments.find((d) => d.id === docId);
-    if (prev) {
-      recordMove({
-        kind: "doc",
-        id: docId,
-        from: { folderId: prev.folder_id, parentDocId: prev.parent_document_id },
-        to: { folderId, parentDocId: null },
-      });
-    }
-    const newDocs = _dbDocuments.map((d) =>
-      d.id === docId ? { ...d, folder_id: folderId, parent_document_id: null } : d
-    );
-    set({
-      _dbDocuments: newDocs,
-      folders: buildFolderTree(_dbFolders, newDocs, expandedFolderIds),
-      rootDocuments: getRootDocuments(newDocs, _dbFolders),
+    const prev = get()._dbDocuments.find((d) => d.id === docId);
+    if (!prev) return;
+    if (prev.folder_id === folderId && !prev.parent_document_id) return;
+    recordMove({
+      kind: "doc",
+      id: docId,
+      from: { folderId: prev.folder_id, parentDocId: prev.parent_document_id },
+      to: { folderId, parentDocId: null },
     });
-    dbMoveDocument(docId, folderId).then(() => {
-      get()._rebuildTree();
-    }).catch((err) => {
+    patchDocLocation(docId, { folder_id: folderId, parent_document_id: null });
+    try {
+      await afterCreate(docId);
+      await dbMoveDocument(docId, folderId);
+    } catch (err) {
       console.error("Failed to move document:", err);
-      set({ _dbDocuments: _dbDocuments, _dbFolders });
-      get()._rebuildTree();
-    });
+      revertDocLocation(docId, prev, { folder_id: folderId, parent_document_id: null });
+    }
   },
 
   moveFolder: async (folderId: string, parentId: string | null, parentDocumentId: string | null = null) => {
-    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const { _dbFolders, _dbDocuments } = get();
     if (
       wouldCreateNestingCycle(_dbFolders, _dbDocuments, {
         kind: "folder",
@@ -864,36 +1070,38 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
     const prev = _dbFolders.find((f) => f.id === folderId);
-    if (prev) {
-      recordMove({
-        kind: "folder",
-        id: folderId,
-        from: { parentId: prev.parent_id, parentDocumentId: prev.parent_document_id },
-        to: { parentId, parentDocumentId },
+    if (!prev) return;
+    if (prev.parent_id === parentId && prev.parent_document_id === parentDocumentId) return;
+    recordMove({
+      kind: "folder",
+      id: folderId,
+      from: { parentId: prev.parent_id, parentDocumentId: prev.parent_document_id },
+      to: { parentId, parentDocumentId },
+    });
+    const to = { parent_id: parentId, parent_document_id: parentDocumentId };
+    set({
+      _dbFolders: get()._dbFolders.map((f) => (f.id === folderId ? { ...f, ...to } : f)),
+    });
+    try {
+      await afterCreate(folderId);
+      await dbMoveFolder(folderId, parentId, parentDocumentId);
+    } catch (err) {
+      console.error("Failed to move folder:", err);
+      // Undo only this move, and only if nothing has moved the folder since.
+      set({
+        _dbFolders: get()._dbFolders.map((f) =>
+          f.id === folderId && f.parent_id === to.parent_id && f.parent_document_id === to.parent_document_id
+            ? { ...f, parent_id: prev.parent_id, parent_document_id: prev.parent_document_id }
+            : f
+        ),
       });
     }
-    const newFolders = _dbFolders.map((f) =>
-      f.id === folderId
-        ? { ...f, parent_id: parentId, parent_document_id: parentDocumentId }
-        : f
-    );
-    set({
-      _dbFolders: newFolders,
-      folders: buildFolderTree(newFolders, _dbDocuments, expandedFolderIds),
-      rootDocuments: getRootDocuments(_dbDocuments, newFolders),
-    });
-    dbMoveFolder(folderId, parentId, parentDocumentId).then(() => {
-      get()._rebuildTree();
-    }).catch((err) => {
-      console.error("Failed to move folder:", err);
-      set({ _dbFolders, _dbDocuments });
-      get()._rebuildTree();
-    });
   },
 
   setParentDocument: async (docId: string, parentDocId: string | null) => {
-    const { _dbFolders, _dbDocuments, expandedFolderIds } = get();
+    const { _dbFolders, _dbDocuments } = get();
     const prev = _dbDocuments.find((d) => d.id === docId);
+    if (!prev) return;
     const parentDoc = parentDocId ? _dbDocuments.find((d) => d.id === parentDocId) : null;
     if (
       wouldCreateNestingCycle(_dbFolders, _dbDocuments, {
@@ -906,38 +1114,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.warn("[store] refused document nest that would create a cycle");
       return;
     }
-    if (prev) {
-      recordMove({
-        kind: "doc",
-        id: docId,
-        from: { folderId: prev.folder_id, parentDocId: prev.parent_document_id },
-        to: {
-          folderId: parentDoc ? parentDoc.folder_id : prev.folder_id,
-          parentDocId,
-        },
-      });
-    }
-    const newDocs = _dbDocuments.map((d) =>
-      d.id === docId
-        ? {
-            ...d,
-            parent_document_id: parentDocId,
-            folder_id: parentDoc ? parentDoc.folder_id : d.folder_id,
-          }
-        : d
-    );
-    set({
-      _dbDocuments: newDocs,
-      folders: buildFolderTree(_dbFolders, newDocs, expandedFolderIds),
-      rootDocuments: getRootDocuments(newDocs, _dbFolders),
+    const to = {
+      folder_id: parentDoc ? parentDoc.folder_id : prev.folder_id,
+      parent_document_id: parentDocId,
+    };
+    if (prev.folder_id === to.folder_id && prev.parent_document_id === to.parent_document_id) return;
+    recordMove({
+      kind: "doc",
+      id: docId,
+      from: { folderId: prev.folder_id, parentDocId: prev.parent_document_id },
+      to: { folderId: to.folder_id, parentDocId },
     });
-    dbSetParentDocument(docId, parentDocId).then(() => {
-      get()._rebuildTree();
-    }).catch((err) => {
+    patchDocLocation(docId, to);
+    try {
+      await afterCreate(docId);
+      if (parentDocId) await afterCreate(parentDocId);
+      await dbSetParentDocument(docId, parentDocId, parentDoc ? parentDoc.folder_id : undefined);
+    } catch (err) {
       console.error("Failed to nest document:", err);
-      set({ _dbFolders, _dbDocuments });
-      get()._rebuildTree();
-    });
+      revertDocLocation(docId, prev, to);
+    }
   },
 
   runUndoable: async (fn) => {
@@ -1017,22 +1213,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleGraph: () => set((s) => ({ isGraphOpen: !s.isGraphOpen })),
 
   expandFolders: (folderIds: string[]) => {
-    if (folderIds.length === 0) return;
-    const { expandedFolderIds, _dbFolders, _dbDocuments } = get();
-    const next = new Set(expandedFolderIds);
-    let changed = false;
-    for (const id of folderIds) {
-      if (!next.has(id)) {
-        next.add(id);
-        changed = true;
-      }
-    }
-    if (!changed) return;
-    set({
-      expandedFolderIds: next,
-      folders: buildFolderTree(_dbFolders, _dbDocuments, next),
-      rootDocuments: getRootDocuments(_dbDocuments, _dbFolders),
-    });
+    get().setTreeExpanded({ folderIds }, true);
   },
 
   addChatMessage: (msg) => {
@@ -1448,6 +1629,7 @@ async function persistTodoMutation(
       );
       // Carry the new updated_at along with the content so an open editor can
       // adopt this write as its own instead of treating it as a stale conflict.
+      prefetched.delete(todoDocId);
       const state = useAppStore.getState();
       const cache = new Map(state._documentCache);
       const patch = { content, updatedAt: saved.updated_at };
@@ -1471,32 +1653,46 @@ async function persistTodoMutation(
 
 // ─── Auto-persist state changes to localStorage ───
 // Uses Zustand subscribe to watch for changes without modifying individual actions.
+// Each slice is marked dirty when it changes and written once the main thread is
+// idle, so a burst of updates costs one write and no change is ever dropped.
 
-let _persistTimer: ReturnType<typeof setTimeout> | null = null;
+const dirty = { sidebar: false, workspace: false, expanded: false };
+let persistScheduled = false;
+
+function flushPersist() {
+  if (!persistScheduled) return;
+  persistScheduled = false;
+  const state = useAppStore.getState();
+  if (dirty.sidebar) persistSidebarCache(state);
+  if (dirty.workspace) persistWorkspaceState(state);
+  if (dirty.expanded) persistExpandedState(state);
+  dirty.sidebar = dirty.workspace = dirty.expanded = false;
+}
+
+function schedulePersist() {
+  if (persistScheduled) return;
+  persistScheduled = true;
+  const w = typeof window !== "undefined" ? window : null;
+  if (w && "requestIdleCallback" in w) {
+    w.requestIdleCallback(flushPersist, { timeout: 1000 });
+  } else {
+    setTimeout(flushPersist, 300);
+  }
+}
 
 useAppStore.subscribe((state, prev) => {
-  // Debounce writes to avoid thrashing localStorage on rapid state changes
-  if (_persistTimer) clearTimeout(_persistTimer);
-  _persistTimer = setTimeout(() => {
-    // Persist sidebar hierarchy when folders/documents change
-    if (state._dbFolders !== prev._dbFolders || state._dbDocuments !== prev._dbDocuments) {
-      persistSidebarCache({
-        _dbFolders: state._dbFolders,
-        _dbDocuments: state._dbDocuments,
-      });
-    }
-
-    // Persist workspace state (tabs, active doc, expanded folders)
-    if (
-      state.openTabs !== prev.openTabs ||
-      state.activeDocumentId !== prev.activeDocumentId ||
-      state.expandedFolderIds !== prev.expandedFolderIds
-    ) {
-      persistWorkspaceState({
-        openTabs: state.openTabs,
-        activeDocumentId: state.activeDocumentId,
-        expandedFolderIds: state.expandedFolderIds,
-      });
-    }
-  }, 300);
+  if (state._dbFolders !== prev._dbFolders || state._dbDocuments !== prev._dbDocuments) {
+    dirty.sidebar = true;
+  }
+  if (state.openTabs !== prev.openTabs || state.activeDocumentId !== prev.activeDocumentId) {
+    dirty.workspace = true;
+  }
+  if (state.expandedFolderIds !== prev.expandedFolderIds || state.expandedDocIds !== prev.expandedDocIds) {
+    dirty.expanded = true;
+  }
+  if (dirty.sidebar || dirty.workspace || dirty.expanded) schedulePersist();
 });
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushPersist);
+}

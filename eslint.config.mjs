@@ -22,6 +22,8 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "public/**",
+    // Design docs; rendered HTML exports bundle minified third-party JS.
+    "plan/**",
   ]),
 ]);
 

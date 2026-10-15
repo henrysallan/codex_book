@@ -77,7 +77,9 @@ export function EditorPanel() {
             <BacklinksPanel />
           </>
         ) : (
-          <div className="h-full flex items-center justify-center text-muted-foreground">
+          // Pages usually arrive from the prefetch cache instantly; only show the
+          // spinner if loading takes long enough to notice.
+          <div className="h-full flex items-center justify-center text-muted-foreground ft-delayed-in">
             <Loader2 size={16} className="animate-spin" />
           </div>
         )}

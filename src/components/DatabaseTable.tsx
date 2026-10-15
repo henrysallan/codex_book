@@ -338,10 +338,13 @@ export function DatabaseTable({ block, editor }: DatabaseTableProps) {
         modifiers={[restrictToHorizontalAxis]}
         onDragEnd={handleDragEnd}
       >
-        <table className="db-table">
-          <thead>
+        {/* The grid is ARIA-role divs styled as a table, not a <table>: BlockNote's
+            table handles treat any <td>/<th> inside the editor as a native table
+            block and throw reading its rows. */}
+        <div role="table" className="db-grid">
+          <div role="rowgroup" className="db-thead">
             {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
+              <div role="row" key={headerGroup.id} className="db-tr">
                 <SortableContext
                   items={columnOrder}
                   strategy={horizontalListSortingStrategy}
@@ -366,107 +369,98 @@ export function DatabaseTable({ block, editor }: DatabaseTableProps) {
                   ))}
                 </SortableContext>
                 {/* Add column button */}
-                <th className="db-th db-add-col">
+                <div role="columnheader" className="db-th db-add-col">
                   <button
                     onClick={addColumn}
                     className="p-1 rounded transition-colors text-muted hover:text-muted-foreground"
                   >
                     <Plus size={14} />
                   </button>
-                </th>
-              </tr>
+                </div>
+              </div>
             ))}
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={columns.length}
-                  className="db-td text-center text-muted text-sm py-6"
-                >
-                  No rows yet. Click + to add one.
-                </td>
-              </tr>
-            ) : (
-              table.getRowModel().rows.map((row) => (
-                <tr
-                  key={row.id}
-                  className="group"
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setRowContextMenu({ x: e.clientX, y: e.clientY, rowId: row.id });
-                  }}
-                >
-                  {row.getVisibleCells().map((cell) => {
-                    const dbCol = (
-                      cell.column.columnDef.meta as {
-                        dbColumn: DatabaseColumn;
-                      }
-                    )?.dbColumn;
-                    const isTitleCol = dbCol?.isTitle === true;
-                    const rowDocId = row.original.docId;
-                    return (
-                      <SortableContext
-                        key={cell.id}
-                        items={columnOrder}
-                        strategy={horizontalListSortingStrategy}
+          </div>
+          <div role="rowgroup" className="db-tbody">
+            {table.getRowModel().rows.map((row) => (
+              <div
+                role="row"
+                key={row.id}
+                className="db-tr group"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setRowContextMenu({ x: e.clientX, y: e.clientY, rowId: row.id });
+                }}
+              >
+                {row.getVisibleCells().map((cell) => {
+                  const dbCol = (
+                    cell.column.columnDef.meta as {
+                      dbColumn: DatabaseColumn;
+                    }
+                  )?.dbColumn;
+                  const isTitleCol = dbCol?.isTitle === true;
+                  const rowDocId = row.original.docId;
+                  return (
+                    <SortableContext
+                      key={cell.id}
+                      items={columnOrder}
+                      strategy={horizontalListSortingStrategy}
+                    >
+                      <DraggableCell
+                        cellId={cell.column.id}
+                        width={cell.column.getSize()}
                       >
-                        <DraggableCell
-                          cellId={cell.column.id}
-                          width={cell.column.getSize()}
-                        >
-                          <CellEditor
-                            type={dbCol?.type ?? "text"}
-                            value={cell.getValue() as CellValue}
-                            config={dbCol?.config}
-                            onChange={(val) =>
-                              updateCell(row.id, cell.column.id, val)
-                            }
-                            docId={isTitleCol ? rowDocId : undefined}
-                            onOpenDoc={isTitleCol ? openDocument : undefined}
-                          />
-                        </DraggableCell>
-                      </SortableContext>
-                    );
-                  })}
-                </tr>
-              ))
+                        <CellEditor
+                          type={dbCol?.type ?? "text"}
+                          value={cell.getValue() as CellValue}
+                          config={dbCol?.config}
+                          onChange={(val) =>
+                            updateCell(row.id, cell.column.id, val)
+                          }
+                          docId={isTitleCol ? rowDocId : undefined}
+                          onOpenDoc={isTitleCol ? openDocument : undefined}
+                        />
+                      </DraggableCell>
+                    </SortableContext>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+          {rows.length === 0 && (
+            <div className="db-empty text-sm">
+              No rows yet. Click + to add one.
+            </div>
+          )}
+          <div className="db-footer">
+            {isAddingRow ? (
+              <div className="flex items-center gap-1">
+                <Plus size={14} className="text-muted flex-shrink-0" />
+                <input
+                  ref={newRowInputRef}
+                  value={newRowTitle}
+                  onChange={(e) => setNewRowTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitNewRow();
+                    if (e.key === "Escape") { setNewRowTitle(""); setIsAddingRow(false); }
+                    e.stopPropagation();
+                  }}
+                  onBlur={commitNewRow}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  placeholder="Enter title…"
+                  className="flex-1 bg-transparent outline-none text-sm text-foreground placeholder:text-ink/20"
+                />
+              </div>
+            ) : (
+              <button
+                onClick={() => setIsAddingRow(true)}
+                className="flex items-center gap-1 text-muted hover:text-muted-foreground text-sm transition-colors"
+              >
+                <Plus size={14} />
+                New row
+              </button>
             )}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td colSpan={columns.length} className="db-td" style={{ borderBottom: 0 }}>
-                {isAddingRow ? (
-                  <div className="flex items-center gap-1">
-                    <Plus size={14} className="text-muted flex-shrink-0" />
-                    <input
-                      ref={newRowInputRef}
-                      value={newRowTitle}
-                      onChange={(e) => setNewRowTitle(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") commitNewRow();
-                        if (e.key === "Escape") { setNewRowTitle(""); setIsAddingRow(false); }
-                        e.stopPropagation();
-                      }}
-                      onBlur={commitNewRow}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      placeholder="Enter title…"
-                      className="flex-1 bg-transparent outline-none text-sm text-foreground placeholder:text-ink/20"
-                    />
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setIsAddingRow(true)}
-                    className="flex items-center gap-1 text-muted hover:text-muted-foreground text-sm transition-colors"
-                  >
-                    <Plus size={14} />
-                    New row
-                  </button>
-                )}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
+          </div>
+        </div>
 
         {/* Row right-click context menu */}
         {rowContextMenu && (
@@ -529,9 +523,9 @@ function DraggableHeader({
   };
 
   return (
-    <th
+    <div
+      role="columnheader"
       ref={setNodeRef}
-      colSpan={header.colSpan}
       style={style}
       className="db-th"
     >
@@ -585,7 +579,7 @@ function DraggableHeader({
         }`}
         onClick={(e) => e.stopPropagation()}
       />
-    </th>
+    </div>
   );
 }
 
@@ -612,8 +606,8 @@ function DraggableCell({
   };
 
   return (
-    <td ref={setNodeRef} style={style} className="db-td">
+    <div role="cell" ref={setNodeRef} style={style} className="db-td">
       {children}
-    </td>
+    </div>
   );
 }

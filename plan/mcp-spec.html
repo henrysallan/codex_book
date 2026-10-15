@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.8.27">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>mcp-spec</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="mcp-spec_files/libs/clipboard/clipboard.min.js"></script>
+<script src="mcp-spec_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="mcp-spec_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="mcp-spec_files/libs/quarto-html/axe/axe-check.js" type="module"></script>
+<script src="mcp-spec_files/libs/quarto-html/popper.min.js"></script>
+<script src="mcp-spec_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="mcp-spec_files/libs/quarto-html/anchor.min.js"></script>
+<link href="mcp-spec_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="mcp-spec_files/libs/quarto-html/quarto-syntax-highlighting-ed96de9b727972fe78a7b5d16c58bf87.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="mcp-spec_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="mcp-spec_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="mcp-spec_files/libs/bootstrap/bootstrap-d6a003b94517c951b2d65075d42fb01b.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="fullcontent quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+
+
+
+<section id="codex-mcp-candidate-edits-spec" class="level1">
+<h1>Codex MCP + Candidate Edits — Spec</h1>
+<p>Status: <strong>proposal, awaiting answers to §12</strong>. Written 2026-08-21 after reading the current tool loop (<a href="../src/lib/ai/tools.ts">src/lib/ai/tools.ts</a>, <a href="../src/app/api/ai/chat/route.ts">chat/route.ts</a>, <a href="../src/lib/ai/router.ts">router.ts</a>), the editor save path, the store, and the auth layer.</p>
+<hr>
+<section id="in-one-paragraph" class="level2">
+<h2 class="anchored" data-anchor-id="in-one-paragraph">0. In one paragraph</h2>
+<p>Expose Codex to external Claude clients (claude.ai, Claude Desktop, Claude Code) through a <strong>remote MCP server hosted inside the Next.js app</strong> at <code>/api/mcp</code>. It shares one tool registry with the in-app chat loop. Reads are direct. <strong>Writes are never direct</strong>: Claude can only create <em>proposals</em> — a first-class <code>note_proposals</code> row that the paired browser renders as green (added) / blue (removed) marks over a read-only preview, with an Accept / Reject bar. Only a human click applies the change, through the same <code>expectedUpdatedAt</code>-guarded save the editor already uses. A server-side <strong>intent gate</strong> refuses proposal calls whose quoted user instruction reads as a question rather than an explicit edit request. One browser per user is the “surface” Claude drives; it’s chosen through a pairing-code handshake in Settings → Connect to Claude.</p>
+<hr>
+</section>
+<section id="goals-and-non-goals" class="level2">
+<h2 class="anchored" data-anchor-id="goals-and-non-goals">1. Goals and non-goals</h2>
+<p><strong>Goals</strong></p>
+<ul>
+<li>Claude (outside the app) can find, read, and reason over notes with the same isolation guarantees as the in-app chat (<code>runAsUser</code>, scoped service-role queries).</li>
+<li>Claude can drive the UI of exactly one paired browser: know what’s open / selected, open a note.</li>
+<li>Claude can propose edits and new notes. Proposals are visible, diffed, reviewable, and inert until accepted.</li>
+<li>Proposing is hard to trigger by accident. Questions and feedback about text do not become edits.</li>
+<li>The in-app chat panel gets the same capability (proposals instead of silent <code>create_note</code>).</li>
+</ul>
+<p><strong>Non-goals (for this spec)</strong></p>
+<ul>
+<li>Raw SQL from Claude. Typed tools only; see §11 for an optional, locked-down read-only variant later.</li>
+<li>Deleting notes, moving folders, or bulk operations from Claude.</li>
+<li>Live collaborative editing / CRDT. We keep whole-column saves with stale-write detection.</li>
+<li>Editing moodboards, database blocks, or PDFs. Proposals cover prose notes (<code>note</code>, <code>daily</code>, quick notes).</li>
+</ul>
+<hr>
+</section>
+<section id="what-exists-and-what-to-keep-change" class="level2">
+<h2 class="anchored" data-anchor-id="what-exists-and-what-to-keep-change">2. What exists, and what to keep / change</h2>
+<p>The current loop works and the isolation layer is good. But as the base for an MCP surface it has specific problems worth fixing rather than duplicating.</p>
+<p><strong>Keep</strong></p>
+<ul>
+<li><code>getToolDb()</code> — service-role client that forces <code>user_id</code> on every select and <code>p_user_id</code> on every RPC. This is the actual tenant boundary; the MCP route uses it unchanged.</li>
+<li><code>runAsUser()</code> / <code>uid()</code> (AsyncLocalStorage, fails closed). Wrap every MCP tool call in it.</li>
+<li><code>createFolderPathResolver</code>, folder-path resolution in <code>create_note</code>, <code>markdownToBlockNote</code>, <code>blocksToPlainText</code>.</li>
+<li><code>serverAuth.getUserFromRequest</code> — validates a Supabase JWT. The MCP route reuses it for OAuth and bearer tokens alike.</li>
+<li>Editor’s <code>expectedUpdatedAt</code> → <code>StaleWriteError</code> → <code>applyRemoteDocument</code> reseed path. Accepting a proposal is “a save from elsewhere”, and the editor already knows how to absorb one.</li>
+</ul>
+<p><strong>Change</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Today</th>
+<th>Problem</th>
+<th>Proposed</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>27 read tools + <code>create_note</code>, 2,285 lines, one <code>switch</code></td>
+<td>Heavy overlap (<code>get_recent_documents</code> ≈ <code>get_recently_modified</code>; five different search entry points; three ways to get doc metadata). ~3–4k tokens of schema on every model round. Hand-written JSON schema, Anthropic-only.</td>
+<td>A <strong>registry</strong>: <code>defineTool({ name, description, input: z.object(...), annotations, execute })</code>. Emits Anthropic <code>tools[]</code> for the chat loop and registers on the MCP server. Consolidate to <strong>6 read tools</strong> (§6).</td>
+</tr>
+<tr class="even">
+<td><code>truncateToolResult</code> cuts at the last comma and appends <code>],"_truncated":true}</code></td>
+<td>Produces invalid JSON for any non-array top-level shape.</td>
+<td>Truncate <em>inside</em> known list fields (<code>results</code>, <code>content</code>) and set <code>truncated: true</code> on the object.</td>
+</tr>
+<tr class="odd">
+<td><code>search_notes</code> = per-keyword title <code>ilike</code> OR’d + <code>search_documents</code> RPC, title hits first, no score</td>
+<td>Can’t tell Claude how confident a match is; “find my note about X” needs disambiguation.</td>
+<td><code>find_notes</code> ranks by <code>similarity(title, q)</code> (pg_trgm, already installed) + FTS rank + optional vector, returns <code>confidence</code>.</td>
+</tr>
+<tr class="even">
+<td><code>create_note</code> writes directly</td>
+<td>Contradicts the new rule: Claude never writes.</td>
+<td>Becomes <code>propose_new_note</code>.</td>
+</tr>
+<tr class="odd">
+<td>Chat SSE special-cases <code>doc_created</code> by tool name</td>
+<td>Each new side-effecting tool needs another branch.</td>
+<td>Generic <code>tool_event { tool, payload }</code>; <code>ChatPanel</code> dispatches on payload kind.</td>
+</tr>
+<tr class="even">
+<td>Router (regex + Groq) picks a <em>retrieval tier</em></td>
+<td>It’s not an intent classifier, and shouldn’t become one.</td>
+<td>Separate <strong>edit-intent gate</strong> (§8) that both surfaces call.</td>
+</tr>
+</tbody>
+</table>
+<hr>
+</section>
+<section id="architecture" class="level2">
+<h2 class="anchored" data-anchor-id="architecture">3. Architecture</h2>
+<pre><code> Claude client (claude.ai · Desktop · Claude Code)
+        │  MCP Streamable HTTP  ·  Authorization: Bearer &lt;Supabase JWT | PAT&gt;
+        ▼
+ ┌──────────────────────────────────────────────────────────────────┐
+ │ Next.js app (Vercel)                                            │
+ │  /api/mcp/[transport]      mcp-handler · auth · runAsUser        │
+ │  /.well-known/oauth-protected-resource → Supabase auth server    │
+ │  /api/proposals/:id/accept|reject  (human-only, bearer)         │
+ │  /api/ai/chat              existing loop, same tool registry     │
+ │                                                                  │
+ │  src/lib/ai/tools/*        registry (zod)  ──┐                   │
+ │  src/lib/proposals/*       ops · diff · preview · apply          │
+ └───────────────┬──────────────────────────────┼───────────────────┘
+                 │ service role, user-scoped    │ broadcast (REST)
+                 ▼                              ▼
+ ┌──────────────────────────┐     ┌─────────────────────────────┐
+ │ Supabase Postgres        │     │ Supabase Realtime            │
+ │ documents, note_proposals│     │ private channel              │
+ │ claude_links, mcp_tokens │     │ surface:{userId}             │
+ └──────────────▲───────────┘     └──────────────┬──────────────┘
+                │ anon key + RLS (state mirror, acks)             │ commands
+                └────────────────── paired browser ◄─────────────┘
+                                   useSurfaceLink() · ProposalReview · Settings</code></pre>
+<p>Pieces:</p>
+<ul>
+<li><strong>Tool registry</strong> <code>src/lib/ai/tools/</code> — one definition per tool, zod input, <code>execute(input, ctx)</code>. <code>ctx</code> carries <code>userId</code>, <code>surface</code> (link row or null), <code>source: 'mcp' | 'chat'</code>.</li>
+<li><strong>MCP route</strong> <code>src/app/api/mcp/[transport]/route.ts</code> — <code>mcp-handler</code> (Vercel’s Streamable-HTTP adapter; stateless, no Redis). <code>maxDuration = 60</code> so <code>await_review</code> / <code>connect_to_codex</code> can long-poll.</li>
+<li><strong>Surface link</strong> — <code>claude_links</code> row (one per user) + Realtime private broadcast channel.</li>
+<li><strong>Proposals</strong> — table, server module, two human-only endpoints, client review UI.</li>
+<li><strong>Client</strong> — <code>useSurfaceLink()</code> hook (heartbeat, state mirror, command listener), <code>ProposalBar</code> + preview editor, Settings “Connect to Claude” panel, badges in sidebar/tabs.</li>
+</ul>
+<hr>
+</section>
+<section id="auth-and-pairing-connect-to-claude" class="level2">
+<h2 class="anchored" data-anchor-id="auth-and-pairing-connect-to-claude">4. Auth and pairing (“Connect to Claude”)</h2>
+<p>Two layers, deliberately separate: <strong>identity</strong> (which account) and <strong>surface</strong> (which browser window).</p>
+<section id="identity" class="level3">
+<h3 class="anchored" data-anchor-id="identity">4.1 Identity</h3>
+<p><strong>A — Supabase OAuth 2.1 Server (recommended; needed for claude.ai / Desktop).</strong> Supabase Auth can act as the OAuth 2.1 authorization server for MCP clients — GA, with dynamic client registration and PKCE. Codex already uses Supabase Auth, so:</p>
+<ol type="1">
+<li>Enable the OAuth server in the Supabase dashboard.</li>
+<li>Serve RFC 9728 metadata at <code>/.well-known/oauth-protected-resource</code> pointing at the project’s authorization server. Clients discover it from a <code>401</code> + <code>WWW-Authenticate</code> on <code>/api/mcp</code>.</li>
+<li>The client runs DCR + PKCE against Supabase; the user logs in with Google as today.</li>
+<li>The access token is a normal Supabase JWT → <code>getUserFromRequest()</code> validates it unchanged.</li>
+</ol>
+<p>Consent UI can be hosted in our app (Supabase supports a custom authorize page) — that’s where the pairing code (§4.2) can also be shown. Verify the exact issuer path and custom-page mechanics against the Supabase docs at implementation time.</p>
+<p><strong>B — Personal access token (day one; Claude Code and scripts).</strong> Settings → Connect to Claude → “Create token” → <code>cdx_…</code> shown once, stored as a SHA-256 hash in <code>mcp_tokens</code>. Used as <code>Authorization: Bearer cdx_…</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">claude</span> mcp add <span class="at">--transport</span> http codex https://<span class="op">&lt;</span>app<span class="op">&gt;</span>/api/mcp <span class="at">--header</span> <span class="st">"Authorization: Bearer cdx_…"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>claude.ai’s connector UI has no header field, so B alone doesn’t reach claude.ai/Desktop.</p>
+</section>
+<section id="surface-pairing-make-sure-the-codes-match" class="level3">
+<h3 class="anchored" data-anchor-id="surface-pairing-make-sure-the-codes-match">4.2 Surface pairing — “make sure the codes match”</h3>
+<p>OAuth proves the account. Pairing picks the <strong>one</strong> browser window Claude may drive and adds the visible human step you described.</p>
+<ol type="1">
+<li>Claude calls <code>connect_to_codex()</code> (or any workspace tool while unpaired). Server creates <code>pairing_requests { code: "7K3-QPD", client_label, expires_at: +5 min }</code> and returns the code. Claude tells the user: <em>“Pairing code <strong>7K3-QPD</strong> — confirm it in Codex → Settings → Connect to Claude.”</em> The tool long-polls up to 55 s for the outcome.</li>
+<li>The browser’s Settings panel (subscribed to the surface channel while open) shows: <strong>Claude (claude.ai) wants to connect · 7K3-QPD · [The codes match — connect] [Deny]</strong></li>
+<li>Confirm → upsert <code>claude_links { user_id PK, surface_id, surface_label }</code>. The PK enforces one browser per user. Any other tab with a different <code>surface_id</code> receives <code>link_changed</code> and shows “Another window is connected to Claude · [Take over]”.</li>
+<li><code>connect_to_codex</code> resolves <code>paired</code>. Workspace tools now work.</li>
+</ol>
+<ul>
+<li><code>surface_id</code> lives in <code>localStorage</code>; pairing survives reloads. Re-pair only when switching browsers.</li>
+<li>Heartbeat every 15 s; <code>last_seen_at</code> older than 45 s ⇒ offline. Workspace tools then return <code>{ ok:false, code:'surface_offline', message:'Codex isn't open in the paired window. Ask the user to open Codex, or to re-pair from Settings.' }</code>.</li>
+<li>Settings shows: paired window label, last seen, <strong>Disconnect</strong>, token list with revoke.</li>
+</ul>
+</section>
+<section id="tables" class="level3">
+<h3 class="anchored" data-anchor-id="tables">4.3 Tables</h3>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode sql code-with-copy"><code class="sourceCode sql"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">create</span> <span class="kw">table</span> mcp_tokens (</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">id</span> uuid <span class="kw">primary</span> <span class="kw">key</span> <span class="kw">default</span> gen_random_uuid(),</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  user_id uuid <span class="kw">not</span> <span class="kw">null</span> <span class="kw">references</span> auth.users(<span class="kw">id</span>) <span class="kw">on</span> <span class="kw">delete</span> <span class="kw">cascade</span>,</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  token_hash text <span class="kw">not</span> <span class="kw">null</span> <span class="kw">unique</span>,</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">label</span> text,</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  created_at timestamptz <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> now(),</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  last_used_at timestamptz,</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  revoked_at timestamptz</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>);</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="kw">create</span> <span class="kw">table</span> pairing_requests (</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">id</span> uuid <span class="kw">primary</span> <span class="kw">key</span> <span class="kw">default</span> gen_random_uuid(),</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>  user_id uuid <span class="kw">not</span> <span class="kw">null</span> <span class="kw">references</span> auth.users(<span class="kw">id</span>) <span class="kw">on</span> <span class="kw">delete</span> <span class="kw">cascade</span>,</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>  code text <span class="kw">not</span> <span class="kw">null</span>,</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>  client_label text,</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>  status text <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> <span class="st">'pending'</span> <span class="kw">check</span> (status <span class="kw">in</span> (<span class="st">'pending'</span>,<span class="st">'confirmed'</span>,<span class="st">'denied'</span>,<span class="st">'expired'</span>)),</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>  surface_id text,</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>  created_at timestamptz <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> now(),</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>  expires_at timestamptz <span class="kw">not</span> <span class="kw">null</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>);</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="kw">create</span> <span class="kw">table</span> claude_links (</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>  user_id uuid <span class="kw">primary</span> <span class="kw">key</span> <span class="kw">references</span> auth.users(<span class="kw">id</span>) <span class="kw">on</span> <span class="kw">delete</span> <span class="kw">cascade</span>,</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>  surface_id text <span class="kw">not</span> <span class="kw">null</span>,</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>  surface_label text,</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>  paired_at timestamptz <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> now(),</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>  last_seen_at timestamptz <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> now(),</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>  state jsonb <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> <span class="st">'{}'</span>:<span class="ch">:jsonb</span></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>);</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a><span class="co">-- RLS: owner select/update on all three (browser writes claude_links.state and answers pairing_requests).</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<hr>
+</section>
+</section>
+<section id="the-surface-channel-browser-server" class="level2">
+<h2 class="anchored" data-anchor-id="the-surface-channel-browser-server">5. The surface channel (browser ↔︎ server)</h2>
+<p>There is no realtime channel in the app today. The MCP route runs in a stateless function, so the channel must not require the server to hold a socket.</p>
+<ul>
+<li><p><strong>Server → browser:</strong> Supabase Realtime <strong>private</strong> broadcast channel <code>surface:{userId}</code> (<code>config: { private: true }</code> + an RLS policy on <code>realtime.messages</code> so only <code>auth.uid() = userId</code> can join). The server publishes over REST with the service role — no persistent connection. Messages: <code>open_note {documentId, blockId?}</code>, <code>flush_save</code>, <code>proposal_created {proposalId,   documentId}</code>, <code>proposal_withdrawn</code>, <code>document_updated {documentId, updatedAt}</code>, <code>pairing_request   {code, clientLabel}</code>, <code>link_changed {surfaceId}</code>.</p></li>
+<li><p><strong>Browser → server:</strong> no broadcast. The browser writes <code>claude_links.state</code> (anon key, RLS) on change, debounced 300 ms, plus heartbeat. Server “awaits an ack” by polling that row (250 ms, ≤ 3 s). Keeps the server stateless and the protocol trivially debuggable.</p></li>
+<li><p><strong>State mirror shape:</strong></p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode ts code-with-copy"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>{ activeDocumentId<span class="op">:</span> <span class="dt">string</span><span class="op">|</span><span class="dt">null</span><span class="op">,</span> activeTitle<span class="op">:</span> <span class="dt">string</span><span class="op">|</span><span class="dt">null</span><span class="op">,</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  view<span class="op">:</span> <span class="st">'dashboard'</span><span class="op">|</span><span class="st">'document'</span><span class="op">|</span><span class="st">'graph'</span><span class="op">,</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  openTabs<span class="op">:</span> {id<span class="op">:</span><span class="dt">string</span><span class="op">,</span>title<span class="op">:</span><span class="dt">string</span>}[]<span class="op">,</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  selection<span class="op">:</span> { docId<span class="op">:</span><span class="dt">string</span><span class="op">,</span> text<span class="op">:</span><span class="dt">string</span><span class="op">,</span> blockIds<span class="op">:</span><span class="dt">string</span>[] } <span class="op">|</span> <span class="dt">null</span><span class="op">,</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  isDirty<span class="op">:</span> <span class="dt">boolean</span><span class="op">,</span>            <span class="co">// editor has an unsaved 1s-debounce pending</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  pendingProposalIds<span class="op">:</span> <span class="dt">string</span>[] }</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div></li>
+<li><p><strong>“In my current note”</strong> → <code>read_note({ current: true })</code> → <code>state.activeDocumentId</code>; if <code>isDirty</code>, send <code>flush_save</code>, wait for <code>isDirty=false</code> (≤ 2 s), then read from Postgres. Selection text comes straight from the mirror.</p></li>
+<li><p><strong>Fallback</strong> if Realtime is undesirable: an <code>mcp_commands</code> table the paired browser polls every 2 s. Same message shapes; swap the transport, not the protocol.</p></li>
+</ul>
+<hr>
+</section>
+<section id="tool-catalog-mcp" class="level2">
+<h2 class="anchored" data-anchor-id="tool-catalog-mcp">6. Tool catalog (MCP)</h2>
+<p>Sixteen tools. Descriptions are short; the policy text lives once in the server <code>instructions</code> and is repeated only on the two <code>propose_*</code> tools.</p>
+<section id="read-readonlyhint-true-replaces-22-of-todays-27" class="level3">
+<h3 class="anchored" data-anchor-id="read-readonlyhint-true-replaces-22-of-todays-27">Read (<code>readOnlyHint: true</code>) — replaces 22 of today’s 27</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Tool</th>
+<th>Input</th>
+<th>Returns / notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>find_notes</code></td>
+<td><code>query</code>, <code>limit=8</code>, <code>mode: auto\|title\|content\|semantic</code>, <code>filters?: { folder, tags[], from, to, similarTo }</code></td>
+<td>Ranked <code>{ id, title, folderPath, updatedAt, summary, matchedOn, confidence: high\|medium\|low }</code>. Title trigram + FTS (<code>search_documents</code>) + vector (<code>match_documents</code>). “If the user named a specific note and top confidence isn’t <code>high</code>, ask which one.” Absorbs <code>search_notes</code>, <code>search_document_content</code>, <code>search_by_tags</code>, <code>search_by_date</code>, <code>find_similar_documents</code>, <code>get_daily_note</code>.</td>
+</tr>
+<tr class="even">
+<td><code>read_note</code></td>
+<td><code>ref: { documentId } \| { current: true } \| { title }</code>, <code>format: anchored\|plain\|outline</code>, <code>range?</code></td>
+<td>Meta + body. <code>anchored</code> (default) is markdown with a block anchor per line (§7.3). <code>outline</code> returns chunk summaries. Also <code>isOpenInCodex</code>, <code>hasUnsavedEdits</code>, <code>pendingProposalId</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>get_note_info</code></td>
+<td><code>documentIds[]</code> (1–20), <code>include?: ['links','hierarchy','annotations','lengths']</code></td>
+<td>Metadata, word counts, parent chain, in/out links. Absorbs <code>get_document_info</code>, <code>batch_get_document_info</code>, <code>compare_documents</code>, <code>get_document_lengths</code>, <code>get_document_hierarchy</code>, <code>get_backlinks</code>, <code>get_document_children</code>, <code>get_annotations</code>.</td>
+</tr>
+<tr class="even">
+<td><code>browse</code></td>
+<td><code>folder?: id \| name \| "A &gt; B"</code>, <code>depth=1</code>, <code>includeDocs=true</code></td>
+<td>Folder tree slice with counts. Absorbs <code>get_folder_tree</code>, <code>list_folder_contents</code>, <code>get_folder_info</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>get_activity</code></td>
+<td><code>kind: recent\|stats\|orphans\|count</code>, <code>sortBy</code>, <code>groupBy</code>, <code>from</code>, <code>to</code>, <code>folder</code>, <code>tag</code>, <code>limit</code></td>
+<td>Absorbs <code>get_recent_documents</code>, <code>get_recently_modified</code>, <code>get_writing_stats</code>, <code>count_documents</code>, <code>get_orphan_documents</code>.</td>
+</tr>
+<tr class="even">
+<td><code>get_tags</code></td>
+<td><code>minCount=1</code>, <code>cooccurrence=false</code></td>
+<td>Absorbs <code>get_all_tags</code>, <code>get_tag_graph</code>.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="workspace-needs-a-live-paired-surface" class="level3">
+<h3 class="anchored" data-anchor-id="workspace-needs-a-live-paired-surface">Workspace (needs a live paired surface)</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Tool</th>
+<th>Input</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>get_workspace_state</code></td>
+<td>—</td>
+<td>The state mirror + link label + pending proposals.</td>
+</tr>
+<tr class="even">
+<td><code>open_note</code></td>
+<td><code>documentId</code>, <code>blockId?</code></td>
+<td>Broadcasts <code>open_note</code>, waits for ack (≤ 3 s).</td>
+</tr>
+<tr class="odd">
+<td><code>add_to_chat_context</code></td>
+<td><code>documentIds[]</code></td>
+<td>Pins notes in the in-app chat. Optional; cheap.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="write-review-gated-destructivehint-false" class="level3">
+<h3 class="anchored" data-anchor-id="write-review-gated-destructivehint-false">Write — review-gated (<code>destructiveHint: false</code>)</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Tool</th>
+<th>Input</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>propose_edit</code></td>
+<td><code>target: { documentId } \| { current: true }</code>, <code>summary</code> (≤ 120 chars), <code>instruction_quote</code>, <code>confirmation_quote?</code>, <code>ops[]</code> (1–50)</td>
+<td>Runs the gate (§8), validates ops, builds preview, stores, notifies. Returns <code>{ proposalId, hunks, status:'pending' }</code> plus a hint: <em>tell the user to review in Codex; do not say the note was changed.</em></td>
+</tr>
+<tr class="even">
+<td><code>propose_new_note</code></td>
+<td><code>title</code>, <code>markdown</code>, <code>folder?</code>, <code>tags?</code>, <code>summary</code>, <code>instruction_quote</code>, <code>confirmation_quote?</code></td>
+<td>Same gate. Appears as a ghost note until accepted.</td>
+</tr>
+<tr class="odd">
+<td><code>get_proposal</code></td>
+<td><code>proposalId</code></td>
+<td>Status. If <code>stale</code>, includes fresh anchors for the touched blocks.</td>
+</tr>
+<tr class="even">
+<td><code>await_review</code></td>
+<td><code>proposalId</code>, <code>timeoutSec ≤ 55</code></td>
+<td>Long-polls; resolves <code>accepted \| rejected \| pending</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>withdraw_proposal</code></td>
+<td><code>proposalId</code></td>
+<td>Claude can retract its own pending proposal.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="pairing" class="level3">
+<h3 class="anchored" data-anchor-id="pairing">Pairing</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Tool</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>connect_to_codex</code></td>
+<td>Returns the code, long-polls ≤ 55 s, resolves <code>paired \| pending \| denied</code>.</td>
+</tr>
+<tr class="even">
+<td><code>connection_status</code></td>
+<td>Paired? Online? Which window?</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Deliberately not exposed:</strong> <code>accept_proposal</code> / <code>reject_proposal</code> (human-only, browser-only), delete, move/rename (P2 as metadata proposals), raw SQL, backfill/index.</p>
+<hr>
+</section>
+</section>
+<section id="candidate-edits-proposals" class="level2">
+<h2 class="anchored" data-anchor-id="candidate-edits-proposals">7. Candidate edits (proposals)</h2>
+<section id="principles" class="level3">
+<h3 class="anchored" data-anchor-id="principles">7.1 Principles</h3>
+<ol type="1">
+<li><strong>Nothing Claude does mutates a note.</strong> A proposal is inert data. Only <code>POST    /api/proposals/:id/accept</code> from the paired browser writes to <code>documents</code>.</li>
+<li><strong>The preview never touches autosave.</strong> Review renders into a second, read-only editor; the live editor is unmounted while reviewing so the 1 s debounce cannot fire on preview content.</li>
+<li><strong>Ops are anchored, not positional.</strong> Every op targets a block id and carries the hash of that block as Claude saw it, so a proposal can still apply (or fail honestly) after the user keeps typing.</li>
+<li><strong>Claude can’t quietly replace a whole note.</strong> <code>rewrite_all</code> exists but is refused for notes that contain blocks markdown can’t round-trip.</li>
+</ol>
+</section>
+<section id="data-model" class="level3">
+<h3 class="anchored" data-anchor-id="data-model">7.2 Data model</h3>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode sql code-with-copy"><code class="sourceCode sql"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">create</span> <span class="kw">table</span> note_proposals (</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">id</span> uuid <span class="kw">primary</span> <span class="kw">key</span> <span class="kw">default</span> gen_random_uuid(),</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  user_id uuid <span class="kw">not</span> <span class="kw">null</span> <span class="kw">references</span> auth.users(<span class="kw">id</span>) <span class="kw">on</span> <span class="kw">delete</span> <span class="kw">cascade</span>,</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  document_id uuid <span class="kw">references</span> documents(<span class="kw">id</span>) <span class="kw">on</span> <span class="kw">delete</span> <span class="kw">cascade</span>,   <span class="co">-- null for kind='create'</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>  kind text <span class="kw">not</span> <span class="kw">null</span> <span class="kw">check</span> (kind <span class="kw">in</span> (<span class="st">'edit'</span>,<span class="st">'create'</span>)),</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>  status text <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> <span class="st">'pending'</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">check</span> (status <span class="kw">in</span> (<span class="st">'pending'</span>,<span class="st">'accepted'</span>,<span class="st">'rejected'</span>,<span class="st">'stale'</span>,<span class="st">'superseded'</span>,<span class="st">'withdrawn'</span>,<span class="st">'expired'</span>)),</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">source</span> text <span class="kw">not</span> <span class="kw">null</span> <span class="kw">check</span> (<span class="kw">source</span> <span class="kw">in</span> (<span class="st">'mcp'</span>,<span class="st">'chat'</span>)),</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>  client_label text,                  <span class="co">-- "claude.ai", "Claude Code", "Codex chat"</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">summary</span> text <span class="kw">not</span> <span class="kw">null</span>,              <span class="co">-- one line, shown in the bar</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>  instruction_quote text <span class="kw">not</span> <span class="kw">null</span>,</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>  gate_verdict text <span class="kw">not</span> <span class="kw">null</span>,         <span class="co">-- explicit | confirmed  (audit trail)</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>  <span class="co">-- create</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>  title text, folder_id uuid <span class="kw">references</span> folders(<span class="kw">id</span>), tags text[],</span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>  <span class="co">-- edit</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>  ops jsonb <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> <span class="st">'[]'</span>:<span class="ch">:jsonb</span>,        <span class="co">-- [{ id, type, anchor, blockId, baseHash, ... }]</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>  base_updated_at timestamptz,</span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>  base_content_hash text,</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>  base_content jsonb,                  <span class="co">-- snapshot for "Undo" after accept</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>  result_blocks jsonb,                 <span class="co">-- full doc if every op is accepted</span></span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>  preview_blocks jsonb,                <span class="co">-- merged view with suggestion marks</span></span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>  hunks jsonb <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> <span class="st">'[]'</span>:<span class="ch">:jsonb</span>,      <span class="co">-- [{ id, opId, kind, anchor, before, after }]</span></span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>  created_at timestamptz <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> now(),</span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>  resolved_at timestamptz,</span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a>  applied_updated_at timestamptz,</span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>  expires_at timestamptz <span class="kw">not</span> <span class="kw">null</span> <span class="kw">default</span> now() <span class="op">+</span> <span class="dt">interval</span> <span class="st">'7 days'</span></span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a>);</span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a><span class="kw">create</span> <span class="kw">index</span> <span class="kw">on</span> note_proposals (user_id, status);</span>
+<span id="cb5-29"><a href="#cb5-29" aria-hidden="true" tabindex="-1"></a><span class="kw">create</span> <span class="kw">index</span> <span class="kw">on</span> note_proposals (document_id) <span class="kw">where</span> status <span class="op">=</span> <span class="st">'pending'</span>;</span>
+<span id="cb5-30"><a href="#cb5-30" aria-hidden="true" tabindex="-1"></a><span class="co">-- RLS: owner select. Status changes go through the API (service role), never from the browser directly.</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="op-language-and-anchors" class="level3">
+<h3 class="anchored" data-anchor-id="op-language-and-anchors">7.3 Op language and anchors</h3>
+<p><code>read_note</code> (format <code>anchored</code>) gives Claude stable handles. Anchors are the shortest unique prefix of the BlockNote block id (6 chars by default):</p>
+<pre><code>⟦a1f2c9⟧ # Reading: Weil, Gravity and Grace
+⟦b7e210⟧ First pass through the notebooks. Three themes keep recurring…
+⟦c03d44⟧ ## Attention
+⟦d9a8f1⟧ - Attention as the rarest form of generosity
+⟦e4b6c2⟧   - (child) cf. ⟦pageLink: Simone Weil — biography⟧
+⟦f51e07⟧ [database block "Quotes" · 3 columns × 12 rows — not editable with markdown]</code></pre>
+<p>Ops (server assigns <code>id</code>, resolves <code>anchor → blockId</code>, records <code>baseHash</code>):</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Op</th>
+<th>Fields</th>
+<th>Semantics</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>replace_text</code></td>
+<td><code>anchor</code>, <code>find</code>, <code>replace</code></td>
+<td>Inline. <code>find</code> must occur exactly once in the block’s plain text. Untouched runs keep their styles. Preferred for small edits.</td>
+</tr>
+<tr class="even">
+<td><code>replace_block</code></td>
+<td><code>anchor</code>, <code>markdown</code></td>
+<td>Whole block. Children preserved.</td>
+</tr>
+<tr class="odd">
+<td><code>insert_after</code></td>
+<td><code>anchor \| "start"</code>, <code>markdown</code></td>
+<td>One or more blocks.</td>
+</tr>
+<tr class="even">
+<td><code>delete_block</code></td>
+<td><code>anchor</code></td>
+<td>Block and children.</td>
+</tr>
+<tr class="odd">
+<td><code>append</code></td>
+<td><code>markdown</code></td>
+<td>At the end of the note.</td>
+</tr>
+<tr class="even">
+<td><code>rewrite_all</code></td>
+<td><code>markdown</code></td>
+<td>Whole note. <strong>Refused</strong> if the note contains <code>database</code>, <code>image</code>/<code>file</code>, <code>column</code>, or <code>pageLink</code>-bearing blocks — the error lists their anchors and tells Claude to use targeted ops.</td>
+</tr>
+</tbody>
+</table>
+<p>Markdown → blocks via the existing <code>markdownToBlockNote</code> (extend it to turn <code>[[Title]]</code> into a <code>pageLink</code> when a title matches). Blocks → anchored markdown via the currently-unused <code>blocksToMarkdown.ts</code>, resurrected, with non-convertible blocks rendered as bracketed descriptions.</p>
+</section>
+<section id="server-pipeline-propose_edit" class="level3">
+<h3 class="anchored" data-anchor-id="server-pipeline-propose_edit">7.4 Server pipeline (<code>propose_edit</code>)</h3>
+<ol type="1">
+<li>Resolve target (<code>current</code> → surface state; flush if dirty). Must be owned, <code>doc_type ∈ {note,    daily, quick note}</code>, no <code>database</code>-only docs.</li>
+<li><strong>Gate</strong> (§8). Refuse with a structured, actionable error if it fails.</li>
+<li>Resolve anchors against the current content; reject unknown/ambiguous anchors, <code>find</code> strings that match ≠ 1 time, ops over <code>database</code>/<code>column</code> blocks.</li>
+<li>Compute <code>result_blocks</code> (apply all ops) and <code>preview_blocks</code> (§7.5) and <code>hunks[]</code>.</li>
+<li>Supersede any pending proposal on the same note (status <code>superseded</code>); refuse if one was created &lt; 30 s ago by the same source (spam brake).</li>
+<li>Insert row, broadcast <code>proposal_created</code>, return.</li>
+</ol>
+</section>
+<section id="review-ui" class="level3">
+<h3 class="anchored" data-anchor-id="review-ui">7.5 Review UI</h3>
+<p><strong>Where it shows.</strong> When the open note has a pending proposal, <code>DocumentEditor</code> swaps to review mode:</p>
+<pre><code>┌──────────────────────────────────────────────────────────────────────────────┐
+│ ● Claude proposes 3 changes · "Tighten the intro and add a Summary section"  │
+│   from claude.ai · 2 min ago         [Show original]   [Reject]  [Accept all] │
+└──────────────────────────────────────────────────────────────────────────────┘
+  # Reading: Weil, Gravity and Grace
+  First pass through the notebooks. ~~Three themes keep recurring and I~~
+  ~~want to get them down before I forget.~~ Three themes recur: attention,
+  decreation, and affliction.
+                                                        ^^^^ green = added
+  ## Attention                                          ~~~~ blue  = removed
+  …
+  ## Summary                      ← whole block added: green left rule + tint
+  Weil's notebooks circle one move: …</code></pre>
+<ul>
+<li><strong>Marks.</strong> Inline word-level diff (<code>diffWords</code>) inside changed text blocks: inserted runs carry a custom BlockNote style <code>suggestion: "insert"</code> (green tint, e.g.&nbsp;<code>#dcfce7</code> / text <code>#166534</code>), removed runs <code>suggestion: "delete"</code> (blue tint <code>#dbeafe</code>, text <code>#1e40af</code>, strikethrough). Whole-block add/remove (and non-text blocks) get a block-level decoration: 3 px left rule + faint tint in the same hue. Implemented with <code>createReactStyleSpec</code> for inline and a small ProseMirror decoration plugin keyed by block id for block-level.</li>
+<li><strong>Preview editor.</strong> A second <code>useCreateBlockNote</code> instance, <code>editable={false}</code>, same schema + the <code>suggestion</code> style, seeded with <code>preview_blocks</code>. The live editor is unmounted.</li>
+<li><strong>Bar actions.</strong> <em>Accept all</em> → §7.6. <em>Reject</em> → status <code>rejected</code>, back to the live editor. <em>Show original</em> toggles marks off. <em>Dismiss for now</em> (overflow menu) hides the preview but keeps the proposal pending and the badge lit. ⌘⏎ accepts; there is no keyboard reject.</li>
+<li><strong>Per-hunk</strong> (P2): a stepper in the bar (<code>1/3 ‹ ›</code>, ✓ / ✗ per hunk). Accepting a subset recomputes the result from accepted ops only.</li>
+<li><strong>Not the open note.</strong> Toast “Claude proposed changes to <em>Weil notes</em> · [Review]”; a green dot on the sidebar item and tab. A small <strong>Proposals</strong> inbox (count badge) in the chat panel header lists all pending ones.</li>
+<li><strong>New notes</strong> (<code>kind='create'</code>). A ghost entry (dashed outline, “Proposed”) in the target folder; opening it shows the full body as an insertion with the same bar. Accept creates the document via the normal insert path; Reject removes the ghost.</li>
+</ul>
+</section>
+<section id="accept-pipeline" class="level3">
+<h3 class="anchored" data-anchor-id="accept-pipeline">7.6 Accept pipeline</h3>
+<p><code>POST /api/proposals/:id/accept { hunkIds? }</code> — bearer-authed, service role, <code>runAsUser</code>:</p>
+<ol type="1">
+<li>Load proposal + current document. If <code>status ≠ pending</code> → 409.</li>
+<li>If <code>documents.updated_at == base_updated_at</code> → use <code>result_blocks</code> (or recompute from the accepted subset).</li>
+<li>Else <strong>rebase</strong>: for each accepted op, locate the block by id in the current content; if its hash equals <code>baseHash</code>, apply; if missing or changed → conflict. Any conflict → 409 <code>{ stale: true,    conflicts: [hunkIds] }</code>; the bar shows “The note changed since this was proposed — 1 of 3 changes can’t apply · [Apply the rest] [Reject]”. Proposal status → <code>stale</code> until resolved.</li>
+<li><code>updateDocument(id, { content }, { expectedUpdatedAt })</code> (server-side, same function the editor uses). On <code>StaleWriteError</code>, retry the rebase once, then 409.</li>
+<li>Server-side <code>syncBacklinks</code> (today it’s client-only; add the server helper), then fire-and-forget <code>indexDocument</code>.</li>
+<li>Mark <code>accepted</code>, set <code>applied_updated_at</code>, broadcast <code>document_updated</code>.</li>
+<li>Browser: store updates <code>activeDocument</code>; the existing <code>applyRemoteDocument</code> reseeds the live editor; review mode closes; toast “Applied 3 changes · Undo” (30 s; Undo writes <code>base_content</code> back with the same guard).</li>
+</ol>
+<p>Reject: <code>status='rejected'</code>, <code>resolved_at</code>, broadcast. No document write.</p>
+</section>
+<section id="what-claude-sees" class="level3">
+<h3 class="anchored" data-anchor-id="what-claude-sees">7.7 What Claude sees</h3>
+<ul>
+<li><code>propose_*</code> returns immediately with <code>proposalId</code>. The description instructs: <em>say you’ve proposed the change and where to review it; never say the note was updated.</em></li>
+<li><code>await_review</code> lets Claude block (≤ 55 s) when the user is clearly at the keyboard.</li>
+<li>On <code>rejected</code>, Claude can ask what to change. On <code>stale</code>, <code>get_proposal</code> returns fresh anchors for the touched blocks so a re-propose is one cheap call, not a re-read.</li>
+</ul>
+<hr>
+</section>
+</section>
+<section id="the-intent-gate" class="level2">
+<h2 class="anchored" data-anchor-id="the-intent-gate">8. The intent gate</h2>
+<p>We don’t control the client model’s reasoning, so the guard has to live server-side and be independent of prompt obedience. Defense in depth:</p>
+<ol type="1">
+<li><strong>Policy text, once.</strong> MCP server <code>instructions</code> + both <code>propose_*</code> descriptions: <em>Only propose when the user explicitly asked for the note to be changed. Questions, critiques, “what would you change”, “is this too long” → answer in chat. If unsure, ask “Want me to propose that as an edit to ‹title›?” and only then call with their reply as <code>confirmation_quote</code>.</em></li>
+<li><strong>Required evidence.</strong> <code>instruction_quote</code> — the user’s words, verbatim — is a required input. Optional <code>confirmation_quote</code> for the ask-then-confirm path.</li>
+<li><strong>Classifier</strong> <code>classifyEditIntent(instruction, confirmation?)</code> → <code>explicit | implicit | question | unclear</code>:
+<ul>
+<li>Fast path (regex, no API): imperative edit verb (<code>update, edit, change, rewrite, add, insert,   append, remove, delete, fix, replace, put, tighten, expand, shorten, reorganize</code>) aimed at a note/section/paragraph/“this”/“it”/“my …” ⇒ <code>explicit</code>. Interrogatives (<code>?</code>, <code>what/how/should/   is this/do you think/would you</code>) with no imperative ⇒ <code>question</code>.</li>
+<li>Otherwise Groq 8B through <code>groqLimited()</code> (or Haiku) with a tight few-shot rubric, <code>temperature 0</code>, one token out.</li>
+<li>Passes only on <code>explicit</code>, or <code>implicit</code> <strong>with</strong> an affirmative <code>confirmation_quote</code>.</li>
+</ul></li>
+<li><strong>Refusal is actionable.</strong> <code>{ ok:false, code:'needs_explicit_request', message:'The quoted message    reads as a question or feedback, not a request to change the note. Answer it in chat. If they want    the change, ask "Want me to propose that edit to ‹title›?" and call again with their reply as    confirmation_quote.' }</code></li>
+<li><strong>Brakes.</strong> ≤ 1 pending proposal per note (new supersedes), ≤ 50 ops, ≤ 20k chars of markdown, 30 s spam window. Every verdict logged (<code>proposal_gate_logs</code>) for tuning. Settings toggle <strong>Strict mode</strong>: always require <code>confirmation_quote</code>.</li>
+</ol>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>User said</th>
+<th>Verdict</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>“Is the intro too long?”</td>
+<td>question</td>
+<td>answer in chat</td>
+</tr>
+<tr class="even">
+<td>“The intro is too long.”</td>
+<td>implicit</td>
+<td>blocked → Claude asks; “yes” unlocks</td>
+</tr>
+<tr class="odd">
+<td>“Tighten the intro.”</td>
+<td>explicit</td>
+<td>proposal</td>
+</tr>
+<tr class="even">
+<td>“Could you tighten the intro?”</td>
+<td>explicit (polite imperative)</td>
+<td>proposal</td>
+</tr>
+<tr class="odd">
+<td>“What would you change about this?”</td>
+<td>question</td>
+<td>answer in chat</td>
+</tr>
+<tr class="even">
+<td>“Add a section on attention to my Weil note.”</td>
+<td>explicit</td>
+<td>proposal</td>
+</tr>
+<tr class="odd">
+<td>“yes, do it” (after “want me to propose…”)</td>
+<td>confirmation</td>
+<td>proposal</td>
+</tr>
+</tbody>
+</table>
+<p>And after all of that, the Accept button is the real safety. The gate is about <strong>noise</strong>, not <strong>safety</strong> — even a gate miss produces only an inert preview.</p>
+<hr>
+</section>
+<section id="in-app-chat-parity" class="level2">
+<h2 class="anchored" data-anchor-id="in-app-chat-parity">9. In-app chat parity</h2>
+<ul>
+<li>The chat loop consumes the same registry. It gains <code>propose_edit</code> / <code>propose_new_note</code>; <code>create_note</code> is removed (or kept behind an opt-in “trusted chat” setting — your call, §12).</li>
+<li><code>instruction_quote</code> for the chat surface is verified server-side against the actual last user message (the server has it), so the chat path can’t be talked into a forged quote.</li>
+<li>SSE gains a generic <code>tool_event</code>; <code>ChatPanel</code> renders a proposal card (“Proposed 3 changes to <em>Weil notes</em> · Review”) and the editor enters review mode through the same store path.</li>
+<li>The <code>BASE_SYSTEM</code> prompt gets the policy paragraph from §8.1. The TIER0 regexes (“fix / improve / edit this”) stop being retrieval-only hints: with a note open and the gate passed, Claude proposes.</li>
+</ul>
+<hr>
+</section>
+<section id="phasing" class="level2">
+<h2 class="anchored" data-anchor-id="phasing">10. Phasing</h2>
+<p><strong>P0 — Foundations (≈ 2–3 days).</strong> Registry refactor (zod, consolidated read tools, chat loop switched over). <code>/api/mcp</code> via <code>mcp-handler</code> with PAT auth. Settings → Connect to Claude (token create/revoke, pairing confirmation). <code>claude_links</code> + heartbeat + state mirror + Realtime private channel. Read + workspace tools. <em>Exit:</em> from Claude Code, “what note do I have open?” and “open my note on Weil” work against the paired window.</p>
+<p><strong>P1 — Candidate edits (≈ 4–5 days).</strong> <code>note_proposals</code>, op language, anchored <code>read_note</code>, diff/preview engine, suggestion styles + block decorations, intent gate, <code>propose_*</code> tools, <code>ProposalBar</code> + preview editor (accept all / reject), accept pipeline with rebase/stale, toasts and badges, chat parity. <em>Exit:</em> “add a summary section to my current note” → green preview → Accept → saved, backlinked, indexed. “Is this intro too long?” never produces a proposal.</p>
+<p><strong>P2 — Reach and polish (≈ 3 days).</strong> Supabase OAuth 2.1 server for claude.ai / Desktop. Per-hunk accept. Ghost notes + Proposals inbox. Metadata proposals (title / tags / folder). Undo after accept. Expiry job.</p>
+<p><strong>P3 — Optional.</strong> Read-only SQL tool under a dedicated Postgres role (<code>SELECT</code> only, user-scoped views, <code>statement_timeout</code>), off by default. Annotation tools. Database-block row ops.</p>
+<hr>
+</section>
+<section id="risks-and-sharp-edges" class="level2">
+<h2 class="anchored" data-anchor-id="risks-and-sharp-edges">11. Risks and sharp edges</h2>
+<ul>
+<li><strong>Markdown round-trip fidelity.</strong> <code>pageLink</code> inlines, multi-column, database blocks, images. The op language sidesteps most of it (untouched blocks are copied byte-for-byte), <code>rewrite_all</code> is refused for those notes, and <code>replace_text</code> splits inline runs rather than re-serializing them.</li>
+<li><strong>Autosave during review.</strong> Must be structurally impossible, not just guarded: the live editor is unmounted, the preview editor has no <code>onChange</code>.</li>
+<li><strong>Staleness.</strong> Users keep typing after Claude proposes. Block-id anchors + base hashes make rebase cheap and conflicts explicit. Never silently overwrite.</li>
+<li><strong>Channel security.</strong> Broadcast channels are public by default; the surface channel must be private with an RLS policy on <code>realtime.messages</code>, or anyone with the anon key who guesses a user id could push <code>open_note</code> commands.</li>
+<li><strong>Client timeouts.</strong> MCP clients time out long tool calls; cap long-polls at 55 s and set <code>maxDuration = 60</code>.</li>
+<li><strong>Tool schema weight.</strong> 16 tools with terse descriptions. Resist re-growing to 27.</li>
+<li><strong>Consent UX for OAuth.</strong> If Supabase’s hosted consent page can’t show the pairing code, pairing stays a separate step (it works either way; it’s just one more click).</li>
+<li><strong>Elicitation</strong> (server asks the user mid-call) is Claude Code-only today. Don’t depend on it; the review bar is the confirmation surface everywhere.</li>
+</ul>
+<hr>
+</section>
+<section id="decisions-i-need-from-you" class="level2">
+<h2 class="anchored" data-anchor-id="decisions-i-need-from-you">12. Decisions I need from you</h2>
+<ol type="1">
+<li><strong>First client.</strong> Claude Code first (PAT works day one, OAuth in P2) — or do you need claude.ai / Desktop in P0, which pulls the Supabase OAuth server forward?</li>
+<li><strong>In-app chat.</strong> Adopt proposals there too, and turn <code>create_note</code> into <code>propose_new_note</code>? (Recommended: yes — one rule everywhere.)</li>
+<li><strong>Colours.</strong> I read “green or blue” as green = added, blue = removed. Keep blue for removals, or use conventional red?</li>
+<li><strong>Review granularity.</strong> Accept-all / Reject in P1, per-hunk in P2 — acceptable?</li>
+<li><strong>Notes that aren’t open.</strong> Notify + badge (recommended) vs.&nbsp;auto-open the note when a proposal lands?</li>
+<li><strong>SQL.</strong> Typed tools only (recommended), or do you actually want a read-only SQL escape hatch in P3?</li>
+<li><strong>Metadata.</strong> Rename / retag / move as proposals in P2? Delete stays off the table?</li>
+<li><strong>One-browser semantics.</strong> Newest pairing wins, old window gets a banner (recommended) — or require an explicit disconnect first?</li>
+<li><strong>Tool consolidation in chat.</strong> OK to cut the in-app loop to the same 6 read tools, or keep the old 27 names there for now?</li>
+</ol>
+</section>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

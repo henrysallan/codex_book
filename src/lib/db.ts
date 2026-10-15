@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from "./supabase";
 import { localDateTag, dateTagsForLookup, dayContainerTitle } from "./dateTag";
-import { DbDocument, DbFolder, Document, DocumentMeta, Folder, SearchResult, Backlink, DbBacklink, DbAnnotation, AnnotationMessage, DbAttachment, Attachment, DbPdfAnnotation, PdfAnnotation, PdfAnnotationColor, PdfAnnotationType, TextAnchor, GraphLayout } from "./types";
+import { DbDocument, DbFolder, Document, SearchResult, Backlink, DbBacklink, DbAnnotation, AnnotationMessage, DbAttachment, Attachment, DbPdfAnnotation, PdfAnnotation, PdfAnnotationColor, PdfAnnotationType, TextAnchor, GraphLayout } from "./types";
 import { v4 as uuidv4 } from "uuid";
 
 // ============================================================
@@ -106,12 +106,14 @@ export async function fetchFolders(): Promise<DbFolder[]> {
 
 export async function createFolder(
   name: string,
-  parentId: string | null = null
+  parentId: string | null = null,
+  /** Pre-assigned id, so an optimistic row never has to be swapped. */
+  id: string = uuidv4()
 ): Promise<DbFolder> {
   const now = new Date().toISOString();
   const userId = await getCurrentUserId();
   const folder: DbFolder = {
-    id: uuidv4(),
+    id,
     name,
     parent_id: parentId,
     parent_document_id: null,
@@ -264,12 +266,14 @@ export async function createDocument(
   content: string = "[]",
   parentDocumentId: string | null = null,
   docType: import("./types").DocType = "note",
-  tags: string[] = []
+  tags: string[] = [],
+  /** Pre-assigned id, so an optimistic row never has to be swapped. */
+  id: string = uuidv4()
 ): Promise<DbDocument> {
   const now = new Date().toISOString();
   const userId = await getCurrentUserId();
   const doc: DbDocument = {
-    id: uuidv4(),
+    id,
     title,
     subtitle: null,
     folder_id: folderId,
@@ -321,6 +325,7 @@ export async function updateDocument(
     content: string;
     tags: string[];
     folder_id: string | null;
+    parent_document_id: string | null;
     settings: import("./types").NoteSettings;
     share_slug: string | null;
   }>,
@@ -474,12 +479,21 @@ export async function deleteDocument(id: string): Promise<void> {
   if (error) throw error;
 }
 
-/** Move a document into a folder (or to root if folderId is null) */
+/** Move a document into a folder (or to root if folderId is null), un-nesting it from any parent page. */
 export async function moveDocument(
   docId: string,
   folderId: string | null
 ): Promise<void> {
-  await updateDocument(docId, { folder_id: folderId });
+  if (!isSupabaseConfigured()) {
+    await updateDocument(docId, { folder_id: folderId, parent_document_id: null });
+    return;
+  }
+  // A plain metadata write: no need to read the (heavy) row back.
+  const { error } = await supabase!
+    .from("documents")
+    .update({ folder_id: folderId, parent_document_id: null })
+    .eq("id", docId);
+  if (error) throw error;
 }
 
 /** Move a folder under another folder, under a document, or to root */
@@ -510,7 +524,9 @@ export async function moveFolder(
 /** Set or clear a document's parent document (sub-note relationship) */
 export async function setParentDocument(
   docId: string,
-  parentDocId: string | null
+  parentDocId: string | null,
+  /** The parent's folder, when the caller already knows it (skips a fetch). */
+  parentFolderId?: string | null
 ): Promise<void> {
   if (!isSupabaseConfigured()) {
     const docs = getLocalDocuments();
@@ -531,147 +547,22 @@ export async function setParentDocument(
   const updates: Record<string, unknown> = { parent_document_id: parentDocId };
   // When nesting under a parent, inherit its folder so it stays in the same tree branch
   if (parentDocId) {
-    const parent = await fetchDocument(parentDocId);
-    if (parent) updates.folder_id = parent.folder_id;
+    if (parentFolderId !== undefined) {
+      updates.folder_id = parentFolderId;
+    } else {
+      const { data: parent } = await supabase!
+        .from("documents")
+        .select("folder_id")
+        .eq("id", parentDocId)
+        .maybeSingle();
+      if (parent) updates.folder_id = parent.folder_id;
+    }
   }
   const { error } = await supabase!
     .from("documents")
     .update(updates)
     .eq("id", docId);
   if (error) throw error;
-}
-
-// ---------- Tree Building ----------
-
-export function buildFolderTree(
-  dbFolders: DbFolder[],
-  dbDocuments: DbDocument[],
-  expandedFolderIds: Set<string>
-): Folder[] {
-  const folderMap = new Map<string, Folder>();
-
-  // Create folder nodes
-  for (const f of dbFolders) {
-    folderMap.set(f.id, {
-      id: f.id,
-      name: f.name,
-      parentId: f.parent_id,
-      parentDocumentId: f.parent_document_id ?? null,
-      position: f.position,
-      isExpanded: expandedFolderIds.has(f.id),
-      children: [],
-      documents: [],
-    });
-  }
-
-  // Build a lookup of all documents as DocumentMeta
-  const allMeta = new Map<string, DocumentMeta>();
-  for (const d of dbDocuments) {
-    allMeta.set(d.id, {
-      id: d.id,
-      title: d.title,
-      subtitle: d.subtitle,
-      folderId: d.folder_id,
-      parentDocumentId: d.parent_document_id,
-      tags: d.tags,
-      docType: d.doc_type ?? "note",
-      position: d.position,
-      shareSlug: d.share_slug ?? null,
-      createdAt: d.created_at,
-      updatedAt: d.updated_at,
-      childDocuments: [],
-      childFolders: [],
-    });
-  }
-
-  // Wire up child documents (parent_document_id nesting)
-  for (const meta of allMeta.values()) {
-    if (meta.parentDocumentId && allMeta.has(meta.parentDocumentId)) {
-      const parent = allMeta.get(meta.parentDocumentId)!;
-      if (!parent.childDocuments) parent.childDocuments = [];
-      parent.childDocuments.push(meta);
-    }
-  }
-
-  // Assign top-level documents (no parent_document_id) to folders
-  for (const d of dbDocuments) {
-    if (d.parent_document_id) continue; // skip children — they're nested
-    if (d.folder_id && folderMap.has(d.folder_id)) {
-      folderMap.get(d.folder_id)!.documents.push(allMeta.get(d.id)!);
-    }
-  }
-
-  // Build tree — wire folder→folder and folder→document parents
-  const roots: Folder[] = [];
-  for (const folder of folderMap.values()) {
-    if (folder.parentId && folderMap.has(folder.parentId)) {
-      // Nested under another folder
-      folderMap.get(folder.parentId)!.children.push(folder);
-    } else if (folder.parentDocumentId && allMeta.has(folder.parentDocumentId)) {
-      // Nested under a document
-      const parentDoc = allMeta.get(folder.parentDocumentId)!;
-      if (!parentDoc.childFolders) parentDoc.childFolders = [];
-      parentDoc.childFolders.push(folder);
-    } else {
-      roots.push(folder);
-    }
-  }
-
-  return roots;
-}
-
-export function getRootDocuments(dbDocuments: DbDocument[], dbFolders: DbFolder[] = []): DocumentMeta[] {
-  // Build a lookup of all documents as DocumentMeta
-  const allMeta = new Map<string, DocumentMeta>();
-  for (const d of dbDocuments) {
-    allMeta.set(d.id, {
-      id: d.id,
-      title: d.title,
-      subtitle: d.subtitle,
-      folderId: d.folder_id,
-      parentDocumentId: d.parent_document_id,
-      tags: d.tags,
-      docType: d.doc_type ?? "note",
-      position: d.position,
-      shareSlug: d.share_slug ?? null,
-      createdAt: d.created_at,
-      updatedAt: d.updated_at,
-      childDocuments: [],
-      childFolders: [],
-    });
-  }
-
-  // Wire up child documents recursively (arbitrary depth)
-  for (const meta of allMeta.values()) {
-    if (meta.parentDocumentId && allMeta.has(meta.parentDocumentId)) {
-      const parent = allMeta.get(meta.parentDocumentId)!;
-      if (!parent.childDocuments) parent.childDocuments = [];
-      parent.childDocuments.push(meta);
-    }
-  }
-
-  // Wire folders that are nested under root documents
-  for (const f of dbFolders) {
-    if (f.parent_document_id && !f.parent_id && allMeta.has(f.parent_document_id)) {
-      const parentDoc = allMeta.get(f.parent_document_id)!;
-      if (!parentDoc.childFolders) parentDoc.childFolders = [];
-      parentDoc.childFolders.push({
-        id: f.id,
-        name: f.name,
-        parentId: f.parent_id,
-        parentDocumentId: f.parent_document_id,
-        position: f.position,
-        isExpanded: false,
-        children: [],
-        documents: [],
-      });
-    }
-  }
-
-  // Return only root-level docs (no folder, no parent doc)
-  return dbDocuments
-    .filter((d) => !d.folder_id && !d.parent_document_id)
-    .map((d) => allMeta.get(d.id)!);
 }
 
 export function dbDocumentToDocument(db: DbDocument): Document {

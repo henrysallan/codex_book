@@ -32,7 +32,7 @@ Three design commitments that explain most of the code:
 | Chat LLM | Anthropic SDK direct — Haiku 4.5 / Sonnet 4.6 |
 | Router + summarizer | Groq `llama-3.1-8b-instant` |
 | Embeddings | OpenAI `text-embedding-3-small` (1536-dim) |
-| Extras | tldraw (moodboards), react-pdf (PDF viewer), TanStack Table (database block), dnd-kit (sidebar DnD) |
+| Extras | tldraw (moodboards), react-pdf (PDF viewer), TanStack Table (database block), dnd-kit (database column reorder) |
 
 **Not used:** Vercel AI SDK, assistant-ui, Yjs/CRDT, any ORM. Talk to Supabase directly.
 
@@ -118,12 +118,14 @@ component → useAppStore action → db.ts function → Supabase
                 ↓
         _dbFolders / _dbDocuments (raw rows in store)
                 ↓
-        _rebuildTree() → folders / rootDocuments (tree for sidebar)
+        FileTree derives the sidebar (lib/fileTree.ts: index → sorted children → visible rows)
                 ↓
-        persistSidebarCache() → localStorage (cortex:cache:*)
+        store subscriber → localStorage (cortex:cache:*), written when the main thread is idle
 ```
 
-`initialize()` is **cache-first**: it paints from localStorage instantly, then revalidates from Supabase. After a local mutation call `_rebuildTree()` — do **not** re-run `initialize()`, which forces a full refetch.
+`initialize()` is **cache-first**: it paints from localStorage instantly, then revalidates from Supabase. After a local mutation just `set({ _dbDocuments })` / `set({ _dbFolders })` — the sidebar and cache follow. Do **not** re-run `initialize()`, which forces a full refetch. (`_rebuildTree()` is now a no-op kept for old callers.)
+
+Tree mutations are **optimistic**: store actions update the rows synchronously, then write. Creates use the final id up front (`createDocument` / `createFolder` pass it to the insert), so a new page opens in the editor before the insert lands; every later write to that row waits on it (`afterCreate` in store.ts). A failed move rolls back only that row.
 
 ---
 
@@ -211,13 +213,14 @@ Postgres functions callable via `supabase.rpc(...)`: `search_documents` (FTS + t
 ## 10. Sharp edges
 
 - **`documents.content` shape** — see §5.1. The single most common way to corrupt data here.
-- **Cache staleness** — the sidebar renders from localStorage before the network responds. If a tree change doesn't appear, you probably mutated `_dbDocuments` without calling `_rebuildTree()`.
+- **Cache staleness** — the sidebar renders from localStorage before the network responds. If a tree change doesn't appear, you probably mutated a row in place instead of replacing the `_dbDocuments` / `_dbFolders` array (the tree re-derives on array identity).
+- **Sidebar rows are virtualized** — only the rows in view (plus overscan) are in the DOM, each exactly `ROW_H` tall. Don't give rows variable height, and don't look up off-screen rows with `document.querySelector`; work from `rows` / `keyToIndex` in [FileTree.tsx](src/components/FileTree.tsx).
 - **Special `doc_type` documents** (`todo`, `daily_parent`, `daily`, `quick_note_parent`, `moodboard`) are created lazily by `ensure*Document()` helpers in `db.ts`. Never hand-create these rows; reuse the helpers or you'll get duplicates.
 - **Groq rate limit** — any new Groq call must be wrapped in `groqLimited()`.
 - **Service role key** — `supabaseServer.ts` must never be imported from a client component. It silently falls back to the anon key if the service key is missing, which surfaces as confusing RLS failures.
 - **Drive access** requires the Google refresh token stored at sign-in (`user_google_tokens`); `/api/drive/token` exchanges it server-side so the client secret never ships to the browser.
 - **PDF worker** — `canvas` is aliased away in both the Turbopack and webpack configs in [next.config.ts](next.config.ts). Don't remove either alias.
-- **Shortcuts:** ⌘P command palette ([page.tsx](src/app/page.tsx)), ⌘⇧F search dialog ([SearchBar.tsx](src/components/SearchBar.tsx)).
+- **Shortcuts:** ⌘P command palette ([page.tsx](src/app/page.tsx)), ⌘⇧F search dialog ([SearchBar.tsx](src/components/SearchBar.tsx)). The sidebar tree, when focused: ↑↓ / Home / End / PgUp / PgDn move, ⇧ extends the selection, ←→ collapse / expand, ↵ or Space opens, ⌘↵ focuses a folder, F2 renames, ⌫ / Delete deletes (with confirmation), ⌘A selects all, Esc clears, ⇧F10 opens the context menu, typing jumps to a matching name.
 
 ---
 
@@ -225,7 +228,7 @@ Postgres functions callable via `supabase.rpc(...)`: `search_documents` (FTS + t
 
 | Task | Start here |
 |---|---|
-| Sidebar tree, DnD, folder ops | [Sidebar.tsx](src/components/Sidebar.tsx), `buildFolderTree` in [db.ts](src/lib/db.ts) |
+| Sidebar tree, DnD, keyboard, context menu | [FileTree.tsx](src/components/FileTree.tsx), tree model in [fileTree.ts](src/lib/fileTree.ts); shell (header, pinned docs, sort, toolbar) in [Sidebar.tsx](src/components/Sidebar.tsx) |
 | Editor behavior, slash menu, autosave | [DocumentEditor.tsx](src/components/DocumentEditor.tsx) |
 | New block or inline content type | [editorSchema.ts](src/lib/editorSchema.ts) + a spec like [pageLink.tsx](src/lib/pageLink.tsx) |
 | Chat UI, citations, "Look deeper" | [ChatPanel.tsx](src/components/ChatPanel.tsx), [Markdown.tsx](src/components/Markdown.tsx) |

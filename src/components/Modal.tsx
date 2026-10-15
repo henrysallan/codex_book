@@ -31,7 +31,7 @@ export function Modal({
       panel
         ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE))
         : [];
-    focusables()[0]?.focus();
+    (panel?.querySelector<HTMLElement>("[data-autofocus]") ?? focusables()[0])?.focus();
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {

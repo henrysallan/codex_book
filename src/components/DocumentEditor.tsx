@@ -636,10 +636,15 @@ export function DocumentEditor({ document }: DocumentEditorProps) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const multiColumnItems = getMultiColumnSlashMenuItems(editor as any);
 
+      // combineByGroup slots each item in after the last one sharing its group,
+      // so "Database" lands beside the default "Table" item. Appending it after
+      // the defaults would open a second "Advanced" group, and the menu keys
+      // its group headers by name.
       return filterSuggestionItems(
         combineByGroup(
-          [...defaultItems, insertDatabaseItem, newPageItem, ...docItems],
-          multiColumnItems
+          defaultItems,
+          multiColumnItems,
+          [insertDatabaseItem, newPageItem, ...docItems]
         ),
         query
       );

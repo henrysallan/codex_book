@@ -4,7 +4,7 @@
  * Documents nest via `parent_document_id` (and sit in a folder via `folder_id`).
  * Folders nest via `parent_id` or under a document via `parent_document_id`.
  * A drop that makes a node an ancestor of itself removes it from the visible
- * tree (`buildFolderTree` / `getRootDocuments` skip the cycle).
+ * tree (`flattenTree` in fileTree.ts never reaches a cycle from the root).
  */
 
 type FolderRow = {
